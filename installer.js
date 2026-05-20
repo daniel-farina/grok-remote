@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { chooseModeFromInputs, pm2EnvForMode } from './lib/install-mode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HERE = __dirname;
@@ -215,10 +216,8 @@ async function intro() {
 // and env, and falls back to tailnet on non-TTY (preserves prior behavior).
 async function chooseMode() {
   const args = process.argv.slice(2);
-  if (args.includes('--local') || args.includes('-l')) return 'local';
-  if (args.includes('--tailnet')) return 'tailnet';
-  if (process.env.NO_PROMPT === '1') return 'tailnet';
-  if (!process.stdin.isTTY) return 'tailnet';
+  const resolved = chooseModeFromInputs({ args, env: process.env, isTTY: process.stdin.isTTY });
+  if (resolved) return resolved;
 
   writeLn(`${WHITE}${bold}choose a mode:${reset}`);
   writeLn(`  ${BLUE}[1]${reset} ${WHITE}local-only${reset}      ${MUT}(just this Mac, no tailscale)${reset}`);
@@ -502,7 +501,10 @@ async function stepStartPM2() {
   return step('start under pm2', async () => {
     // Stop any prior instance first (best-effort)
     await runCmd('pm2', ['delete', 'grok-remote'], { cwd: HERE });
-    const r = await runCmd('pm2', ['start', 'ecosystem.config.cjs'], { cwd: HERE });
+    const r = await runCmd('pm2', ['start', 'ecosystem.config.cjs'], {
+      cwd: HERE,
+      env: pm2EnvForMode(ctx.mode, process.env),
+    });
     return r.ok
       ? { ok: true, detail: 'pm2 start grok-remote' }
       : { ok: false, detail: r.stderr.split('\n').pop() || 'pm2 start failed' };

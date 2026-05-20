@@ -15,7 +15,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 7910,
-        HOST: '0.0.0.0',
+        HOST: process.env.GROK_REMOTE_HOST || '0.0.0.0',
       },
       out_file: './logs/grok-remote.out.log',
       error_file: './logs/grok-remote.err.log',

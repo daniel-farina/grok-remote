@@ -166,7 +166,7 @@ function cmdHelp() {
     ['status',     'show pm2 status, uptime, memory, url'],
     ['open',       'open the tailnet URL in the default browser'],
     ['url',        'print only the URL (for piping)'],
-    ['start',      'pm2 start ecosystem.config.cjs'],
+    ['start',      'pm2 start ecosystem.config.cjs; pass --local to bind localhost'],
     ['stop',       'pm2 stop grok-remote'],
     ['restart',    'pm2 restart grok-remote'],
     ['logs',       'pm2 logs grok-remote --lines 100'],
@@ -233,9 +233,12 @@ function cmdStatus() {
   if (ip)  writeLn(`  ${pad('ip')}${WHITE}${ip}${reset}`);
 }
 
-function cmdStart() {
+function cmdStart(args = []) {
   if (!INSTALL_DIR) dieNoInstallDir();
-  const ok = runInherit('pm2', ['start', 'ecosystem.config.cjs'], { cwd: INSTALL_DIR });
+  const ok = runInherit('pm2', ['start', 'ecosystem.config.cjs'], {
+    cwd: INSTALL_DIR,
+    env: installEnvForArgs(args),
+  });
   process.exit(ok ? 0 : 1);
 }
 
@@ -254,9 +257,22 @@ function cmdLogs() {
   process.exit(ok ? 0 : 1);
 }
 
-function cmdInstall() {
+function installEnvForArgs(args = []) {
+  if (args.includes('--local') || args.includes('-l')) {
+    return { ...process.env, GROK_REMOTE_HOST: '127.0.0.1' };
+  }
+  if (args.includes('--tailnet')) {
+    return { ...process.env, GROK_REMOTE_HOST: '0.0.0.0' };
+  }
+  return process.env;
+}
+
+function cmdInstall(args = []) {
   if (!INSTALL_DIR) dieNoInstallDir();
-  const ok = runInherit('node', [path.join(INSTALL_DIR, 'installer.js')], { cwd: INSTALL_DIR });
+  const ok = runInherit('node', [path.join(INSTALL_DIR, 'installer.js'), ...args], {
+    cwd: INSTALL_DIR,
+    env: installEnvForArgs(args),
+  });
   process.exit(ok ? 0 : 1);
 }
 
@@ -313,11 +329,11 @@ const cmd = (process.argv[2] || '').toLowerCase();
     case 'status':      cmdStatus(); break;
     case 'open':        cmdOpen(); break;
     case 'url':         cmdUrl(); break;
-    case 'start':       cmdStart(); break;
+    case 'start':       cmdStart(process.argv.slice(3)); break;
     case 'stop':        cmdStop(); break;
     case 'restart':     cmdRestart(); break;
     case 'logs':        cmdLogs(); break;
-    case 'install':     cmdInstall(); break;
+    case 'install':     cmdInstall(process.argv.slice(3)); break;
     default:
       writeLn(`${BAD}unknown command:${reset} ${cmd}`);
       writeLn(`${MUT}try${reset} ${BLUE}gr help${reset}`);

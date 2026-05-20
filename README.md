@@ -39,8 +39,8 @@ One command sets it up. PM2 keeps the server alive. Tailscale handles the networ
 
 - macOS or Linux
 - Node.js 20+ (installer can install it via Homebrew on macOS)
-- Homebrew on macOS (only used if Node or Tailscale are missing)
-- A Tailscale account, free for personal use at [tailscale.com](https://tailscale.com)
+- Homebrew on macOS (only used if Node, or Tailscale for tailnet mode, are missing)
+- A Tailscale account, free for personal use at [tailscale.com](https://tailscale.com), if you want tailnet access
 - `grok` CLI installed and authenticated (the dashboard spawns `grok agent stdio` per conversation)
 
 ---
@@ -51,6 +51,12 @@ One command sets it up. PM2 keeps the server alive. Tailscale handles the networ
 git clone https://github.com/daniel-farina/grok-remote.git
 cd grok-remote
 ./install.sh
+```
+
+To run only on the current machine without Tailscale:
+
+```sh
+./install.sh --local
 ```
 
 The installer walks through, with animated `[ OK ]` / `[skip]` / `[warn]` / `[FAIL]` badges per step:
@@ -72,6 +78,8 @@ The installer walks through, with animated `[ OK ]` / `[skip]` / `[warn]` / `[FA
 Auto-open can be skipped with `--no-open`, `NO_OPEN=1`, `CI=1`, or when the installer detects you're over SSH.
 
 If a step warns about Tailscale auth, run `tailscale up` and open the URL it prints. On macOS, open `Tailscale.app` once if `tailscaled` isn't running. Then re-run `./install.sh` — every step is idempotent.
+
+For local-only installs, re-run setup with `./install.sh --local` or `gr install --local`. This keeps the server bound to `127.0.0.1` and does not touch existing conversations under `~/.grok-remote/agents`.
 
 ---
 
@@ -158,11 +166,11 @@ After `./install.sh` the installer symlinks `gr` into `/usr/local/bin` (or `~/.l
 | `gr status`   | PM2 status, uptime, restarts, memory, cpu, tailnet URL.               |
 | `gr open`     | Open the tailnet URL in your default browser.                         |
 | `gr url`      | Print only the URL on stdout (pipe-friendly).                         |
-| `gr start`    | `pm2 start ecosystem.config.cjs` from the install dir.                |
+| `gr start`    | `pm2 start ecosystem.config.cjs` from the install dir. Pass `--local` to bind localhost. |
 | `gr stop`     | `pm2 stop grok-remote`.                                               |
 | `gr restart`  | `pm2 restart grok-remote`.                                            |
 | `gr logs`     | `pm2 logs grok-remote --lines 100`.                                   |
-| `gr install`  | Re-run the installer (idempotent).                                    |
+| `gr install`  | Re-run the installer (idempotent). Pass `--local` to keep local-only mode. |
 | `gr version`  | Print the grok-remote version.                                        |
 | `gr help`     | Show the subcommand table.                                            |
 
