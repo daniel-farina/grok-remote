@@ -1185,7 +1185,11 @@ export class ChatView {
     // if it's still running so the figlet doesn't overlap the new bubble.
     this._cancelChatIntro();
     const ts = (opts && opts.ts) || Date.now();
-    const userBubble = renderUserBubble(userText, ts);
+    const attachments = Array.isArray(opts && opts.attachments) ? opts.attachments : [];
+    const userBubble = renderUserBubble(userText, ts, {
+      attachments,
+      agentId: this.agentId,
+    });
     // Only animate fresh insertions, never historical replay (that would
     // produce a chaotic shimmer across all replayed turns).
     const animate = !this._isReplaying && !(opts && opts.fromHistory);
@@ -1195,6 +1199,7 @@ export class ChatView {
     const turn = {
       user:      userBubble,
       userText:  userText || '',
+      userAttachments: attachments,
       thinking:  null,
       tools:     [],
       assistant: null,
@@ -1947,19 +1952,25 @@ export class ChatView {
 
   onUserMessage(data, opts) {
     const text = (data && typeof data.text === 'string') ? data.text : extractText(data);
-    if (!text) return;
+    const attachments = Array.isArray(data && data.attachments) ? data.attachments : [];
+    if (!text && !attachments.length) return;
     // Dedup: the live send() path calls startTurn(text) BEFORE the server
     // echoes user_message back over SSE. If the active turn already has the
     // same userText and no assistant/tools yet, the bubble is already there.
     if (
       this.activeTurn &&
-      this.activeTurn.userText === text &&
+      (this.activeTurn.userText === text ||
+        ((this.activeTurn.userAttachments || []).length && attachments.length)) &&
       !this.activeTurn.assistant &&
       (!this.activeTurn.tools || !this.activeTurn.tools.length)
     ) {
       return;
     }
-    this.startTurn(text, { ts: this._lastEventTs || Date.now(), fromHistory: !!(opts && opts.fromHistory) });
+    this.startTurn(text, {
+      ts: this._lastEventTs || Date.now(),
+      fromHistory: !!(opts && opts.fromHistory),
+      attachments,
+    });
   }
 
   onMessageChunk(data, opts) {
@@ -2184,7 +2195,7 @@ export class ChatView {
     // auto-scroll regardless of where they were in the history.
     this._autoScroll = true;
     if (this._jumpToLatestBtn) this._jumpToLatestBtn.hidden = true;
-    this.startTurn(text);
+    this.startTurn(text, { attachments });
     this.scrollToBottom({ force: true });
     this.composerCancel.disabled = false;
 

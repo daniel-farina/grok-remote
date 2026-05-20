@@ -1457,6 +1457,40 @@ body::before {
   border-bottom-right-radius: 4px;
 }
 .msg--user .msg-role { color: var(--blue); }
+.msg-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  max-width: min(360px, 100%);
+}
+.msg-body > .msg-attachments:first-child {
+  margin-top: 0;
+}
+.msg-attachment {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text);
+  text-decoration: none;
+  min-width: 0;
+}
+.msg-attachment-thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid rgba(121, 192, 255, 0.35);
+  background: var(--bg);
+}
+.msg-attachment-name {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* Assistant bubble: panel, left-aligned. */
 .msg--assistant {
   align-items: flex-start;
