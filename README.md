@@ -162,9 +162,9 @@ After `./install.sh` the installer symlinks `gr` into `/usr/local/bin` (or `~/.l
 
 | Command       | What it does                                                          |
 |---------------|-----------------------------------------------------------------------|
-| `gr`          | Smart default: show URL and offer to open; restart if stopped; install if missing. |
+| `gr`          | Ensure the server is healthy, show the URL, and offer to open it.      |
 | `gr status`   | PM2 status, uptime, restarts, memory, cpu, tailnet URL.               |
-| `gr open`     | Open the tailnet URL in your default browser.                         |
+| `gr open`     | Start the server if needed, then open the dashboard.                  |
 | `gr url`      | Print only the URL on stdout (pipe-friendly).                         |
 | `gr start`    | `pm2 start ecosystem.config.cjs` from the install dir. Pass `--local` to bind localhost. |
 | `gr stop`     | `pm2 stop grok-remote`.                                               |

@@ -1,17 +1,26 @@
 #!/usr/bin/env node
 // gr - grok-remote CLI shortcut.
 //
-// Smart default (no args): if running, show the tailnet URL and offer to open it;
-// if stopped, restart; if not installed, run the installer.
+// Smart default (no args): make sure the server is healthy, show the dashboard
+// URL, and offer to open it. Falls back to a direct detached server when pm2 is
+// unavailable.
 //
 // Subcommands: status, open, url, start, stop, restart, logs, install, help, version.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, realpathSync, readFileSync, statSync, mkdirSync } from 'node:fs';
+import { existsSync, realpathSync, readFileSync, mkdirSync, openSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import readline from 'node:readline';
+import {
+  dashboardUrlFor,
+  healthUrlForDashboard,
+  launchEnvForMode,
+  localUrlForPort,
+  modeForLaunch,
+  pm2ConfiguredHost,
+} from '../lib/launch.js';
 
 // ─── colors (match installer.js palette) ─────────────────────────────────
 const COLOR = !process.env.NO_COLOR && (
@@ -107,7 +116,7 @@ function getAppPort() {
 }
 
 // ─── tailnet URL ─────────────────────────────────────────────────────────
-function getTailnetURL() {
+function getTailnetInfo() {
   const port = getAppPort();
   const r = tryCmd('tailscale', ['status', '--json']);
   if (r.ok) {
@@ -116,11 +125,20 @@ function getTailnetURL() {
       const self = parsed.Self || {};
       const dns = (self.DNSName || '').replace(/\.$/, '');
       const ip = (self.TailscaleIPs && self.TailscaleIPs[0]) || '';
-      if (dns) return { url: `http://${dns}:${port}`, dns, ip, port };
-      if (ip)  return { url: `http://${ip}:${port}`,  dns: '', ip, port };
+      if (dns) return { available: true, url: `http://${dns}:${port}`, dns, ip, port };
+      if (ip)  return { available: true, url: `http://${ip}:${port}`,  dns: '', ip, port };
     } catch {}
   }
-  return { url: `http://localhost:${port}`, dns: '', ip: '', port };
+  return { available: false, url: localUrlForPort(port), dns: '', ip: '', port };
+}
+
+function getDashboardURL(rec = getPM2Record()) {
+  const tailnet = getTailnetInfo();
+  return dashboardUrlFor({
+    port: tailnet.port || getAppPort(),
+    configuredHost: pm2ConfiguredHost(rec),
+    tailnet,
+  });
 }
 
 // ─── version ─────────────────────────────────────────────────────────────
@@ -162,9 +180,9 @@ function cmdHelp() {
   writeLn(`${MUT}usage:${reset} ${BLUE}gr${reset} ${DIM}[command]${reset}`);
   writeLn();
   const rows = [
-    ['(no args)',  'smart default: open dashboard, restart, or install'],
+    ['(no args)',  'ensure server is healthy, then offer to open'],
     ['status',     'show pm2 status, uptime, memory, url'],
-    ['open',       'open the tailnet URL in the default browser'],
+    ['open',       'start if needed, then open the dashboard'],
     ['url',        'print only the URL (for piping)'],
     ['start',      'pm2 start ecosystem.config.cjs; pass --local to bind localhost'],
     ['stop',       'pm2 stop grok-remote'],
@@ -187,8 +205,7 @@ function cmdVersion() {
 }
 
 function cmdUrl() {
-  const { url } = getTailnetURL();
-  writeLn(url);
+  writeLn(getDashboardURL());
 }
 
 function openInBrowser(url) {
@@ -198,8 +215,8 @@ function openInBrowser(url) {
   return runInherit(cmd, [url]);
 }
 
-function cmdOpen() {
-  const { url } = getTailnetURL();
+async function cmdOpen(args = []) {
+  const { url } = await ensureServerForOpen(args);
   writeLn(`${MUT}opening${reset} ${BLUE}${url}${reset}`);
   if (!openInBrowser(url)) {
     writeLn(`${BAD}could not launch browser${reset}`);
@@ -210,7 +227,8 @@ function cmdOpen() {
 function cmdStatus() {
   if (!INSTALL_DIR) dieNoInstallDir();
   const rec = getPM2Record();
-  const { url, dns, ip, port } = getTailnetURL();
+  const { dns, ip, port } = getTailnetInfo();
+  const url = getDashboardURL(rec);
   if (!rec) {
     writeLn(`${WARN}grok-remote is not registered with pm2.${reset}`);
     writeLn(`${MUT}run${reset} ${BLUE}gr install${reset} ${MUT}or${reset} ${BLUE}gr start${reset}`);
@@ -267,6 +285,146 @@ function installEnvForArgs(args = []) {
   return process.env;
 }
 
+function startPM2(args = []) {
+  const tailnet = getTailnetInfo();
+  const mode = modeForLaunch({ args, tailnetAvailable: tailnet.available });
+  writeLn(`${MUT}starting grok-remote in ${mode === 'local' ? 'local-only' : 'tailnet'} mode...${reset}`);
+  return runInherit('pm2', ['start', 'ecosystem.config.cjs'], {
+    cwd: INSTALL_DIR,
+    env: launchEnvForMode(mode, process.env),
+  });
+}
+
+function envForLaunchArgs(args = []) {
+  const tailnet = getTailnetInfo();
+  const mode = modeForLaunch({ args, tailnetAvailable: tailnet.available });
+  const pathParts = [
+    path.join(os.homedir(), '.grok', 'bin'),
+    path.join(os.homedir(), '.local', 'bin'),
+    process.env.PATH || '',
+  ].filter(Boolean);
+  const grokBin = path.join(os.homedir(), '.grok', 'bin', 'grok');
+  const baseEnv = {
+    ...process.env,
+    PATH: pathParts.join(path.delimiter),
+  };
+  if (!baseEnv.GROK_BIN && existsSync(grokBin)) baseEnv.GROK_BIN = grokBin;
+  return { mode, env: launchEnvForMode(mode, baseEnv) };
+}
+
+function dashboardUrlForLaunchArgs(args = []) {
+  const { env } = envForLaunchArgs(args);
+  const tailnet = getTailnetInfo();
+  return dashboardUrlFor({
+    port: tailnet.port || getAppPort(),
+    configuredHost: env.HOST,
+    tailnet,
+  });
+}
+
+function startDetachedServer(args = []) {
+  const { mode, env } = envForLaunchArgs(args);
+  const modeLabel = mode === 'local' ? 'local-only' : 'tailnet';
+  writeLn(`${MUT}pm2 is unavailable; starting grok-remote directly in ${modeLabel} mode...${reset}`);
+  try {
+    const logDir = path.join(INSTALL_DIR, 'logs');
+    mkdirSync(logDir, { recursive: true });
+    const out = openSync(path.join(logDir, 'gr-open.out.log'), 'a');
+    const err = openSync(path.join(logDir, 'gr-open.err.log'), 'a');
+    const child = spawn(process.execPath, [path.join(INSTALL_DIR, 'server.js')], {
+      cwd: INSTALL_DIR,
+      detached: true,
+      env,
+      stdio: ['ignore', out, err],
+    });
+    child.unref();
+    writeFileSync(path.join(logDir, 'gr-open.pid'), `${child.pid}\n`);
+    return { ok: true, mode, host: env.HOST };
+  } catch (e) {
+    writeLn(`${BAD}could not start grok-remote directly:${reset} ${e?.message || e}`);
+    return { ok: false, mode, host: env.HOST };
+  }
+}
+
+async function startDetachedAndWait(args = []) {
+  const direct = startDetachedServer(args);
+  if (!direct.ok) process.exit(1);
+  const tailnet = getTailnetInfo();
+  const url = dashboardUrlFor({
+    port: tailnet.port || getAppPort(),
+    configuredHost: direct.host,
+    tailnet,
+  });
+  const healthUrl = healthUrlForDashboard(url);
+  if (await waitForHealth(healthUrl)) return { rec: null, url };
+  writeLn(`${BAD}grok-remote did not become healthy at ${healthUrl}.${reset}`);
+  writeLn(`${MUT}check${reset} ${BLUE}logs/gr-open.err.log${reset} ${MUT}for server output.${reset}`);
+  process.exit(1);
+}
+
+async function isHealthy(url, timeoutMs = 1000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { signal: controller.signal });
+    return r.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function waitForHealth(url, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isHealthy(url)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
+async function ensureServerForOpen(args = []) {
+  if (!INSTALL_DIR) dieNoInstallDir();
+
+  const launchURL = dashboardUrlForLaunchArgs(args);
+  if (await isHealthy(healthUrlForDashboard(launchURL))) return { rec: null, url: launchURL };
+
+  let rec = getPM2Record();
+  if (!rec) {
+    writeLn(`${MUT}grok-remote is not running under pm2. trying saved process list...${reset}`);
+    tryCmd('pm2', ['resurrect']);
+    rec = getPM2Record();
+  }
+
+  if (!rec) {
+    if (!which('pm2')) {
+      return startDetachedAndWait(args);
+    }
+    if (!startPM2(args)) {
+      return startDetachedAndWait(args);
+    }
+    rec = getPM2Record();
+  }
+
+  let url = getDashboardURL(rec);
+  let healthUrl = healthUrlForDashboard(url);
+  if (await waitForHealth(healthUrl)) return { rec, url };
+
+  const st = rec?.pm2_env?.status || 'unknown';
+  writeLn(`${MUT}grok-remote is registered but not healthy (${st}). restarting...${reset}`);
+  if (!runInherit('pm2', ['restart', 'grok-remote'], { cwd: INSTALL_DIR })) process.exit(1);
+
+  rec = getPM2Record();
+  url = getDashboardURL(rec);
+  healthUrl = healthUrlForDashboard(url);
+  if (await waitForHealth(healthUrl)) return { rec, url };
+
+  writeLn(`${BAD}grok-remote did not become healthy at ${healthUrl}.${reset}`);
+  writeLn(`${MUT}try${reset} ${BLUE}gr logs${reset} ${MUT}to inspect the server output.${reset}`);
+  process.exit(1);
+}
+
 function cmdInstall(args = []) {
   if (!INSTALL_DIR) dieNoInstallDir();
   const ok = runInherit('node', [path.join(INSTALL_DIR, 'installer.js'), ...args], {
@@ -290,22 +448,7 @@ async function cmdDefault() {
     writeLn(`${MUT}set GR_HOME=/path/to/grok-remote or run from the project.${reset}`);
     process.exit(1);
   }
-  const rec = getPM2Record();
-  if (!rec) {
-    // not installed
-    writeLn(`${MUT}grok-remote is not installed under pm2. running installer...${reset}`);
-    cmdInstall();
-    return;
-  }
-  const st = rec.pm2_env?.status || 'unknown';
-  if (st !== 'online') {
-    writeLn(`${MUT}grok-remote is ${statusColor(st)}${st}${reset}${MUT}. restarting...${reset}`);
-    const ok = runInherit('pm2', ['restart', 'grok-remote']);
-    process.exit(ok ? 0 : 1);
-    return;
-  }
-  // online: show url and offer to open
-  const { url } = getTailnetURL();
+  const { url } = await ensureServerForOpen();
   writeLn(`${GOOD}● online${reset}  ${BLUE}${bold}${url}${reset}`);
   if (process.stdin.isTTY) {
     const ans = await prompt(`${MUT}open in browser? [Y/n] ${reset}`);
@@ -327,7 +470,7 @@ const cmd = (process.argv[2] || '').toLowerCase();
     case '-v':
     case '--version':   cmdVersion(); break;
     case 'status':      cmdStatus(); break;
-    case 'open':        cmdOpen(); break;
+    case 'open':        await cmdOpen(process.argv.slice(3)); break;
     case 'url':         cmdUrl(); break;
     case 'start':       cmdStart(process.argv.slice(3)); break;
     case 'stop':        cmdStop(); break;
