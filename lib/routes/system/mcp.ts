@@ -5,10 +5,23 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { send, readJsonBody } from '../helpers.js';
 import { runGrokJson, runGrok, errorToResponse } from '../../grok-cli.js';
 import type { RouteRegistrar, RouteParams } from '../system.js';
+import {
+  fetchAllServers,
+  readCache,
+  writeCache,
+  cacheAgeMs,
+  normalizeAll,
+  cachePath,
+  type CacheFile,
+} from '../../mcp-registry-upstream.js';
+
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function register(add: RouteRegistrar): void {
   add('GET',    '/api/system/mcp',                 listHandler);
   add('POST',   '/api/system/mcp',                 addHandler);
+  add('GET',    '/api/system/mcp/registry',         registryGetHandler);
+  add('POST',   '/api/system/mcp/registry/refresh', registryRefreshHandler);
   add('DELETE', '/api/system/mcp/:name',           removeHandler);
   add('GET',    '/api/system/mcp/:name/doctor',    doctorOneHandler);
   add('GET',    '/api/system/mcp/doctor',          doctorAllHandler);
@@ -164,5 +177,68 @@ async function doctorAllHandler(_req: IncomingMessage, res: ServerResponse): Pro
     send(res, 200, { ok: true, result });
   } catch (err) {
     send(res, 500, errorToResponse(err));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Live registry proxy.
+
+let backgroundRefreshInFlight: Promise<void> | null = null;
+
+function cacheToResponse(cache: CacheFile, stale: boolean): Record<string, unknown> {
+  const entries = normalizeAll(cache.servers);
+  return {
+    ok: true,
+    fetchedAt: cache.fetchedAt,
+    count: entries.length,
+    rawCount: cache.count,
+    stale,
+    cachePath: cachePath(),
+    entries,
+  };
+}
+
+async function refreshInBackground(): Promise<void> {
+  if (backgroundRefreshInFlight) return backgroundRefreshInFlight;
+  backgroundRefreshInFlight = (async () => {
+    try {
+      const servers = await fetchAllServers();
+      await writeCache(servers);
+    } catch {
+      // swallow; the next refresh will retry
+    } finally {
+      backgroundRefreshInFlight = null;
+    }
+  })();
+  return backgroundRefreshInFlight;
+}
+
+async function registryGetHandler(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    let cache = await readCache();
+    const age = await cacheAgeMs();
+    if (!cache) {
+      const servers = await fetchAllServers();
+      cache = await writeCache(servers);
+      send(res, 200, cacheToResponse(cache, false));
+      return;
+    }
+    const stale = age === null ? true : age > CACHE_TTL_MS;
+    if (stale) void refreshInBackground();
+    send(res, 200, cacheToResponse(cache, stale));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    send(res, 500, { ok: false, error: msg });
+  }
+}
+
+async function registryRefreshHandler(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const servers = await fetchAllServers();
+    const cache = await writeCache(servers);
+    send(res, 200, cacheToResponse(cache, false));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    send(res, 502, { ok: false, error: `registry refresh failed: ${msg}` });
   }
 }
