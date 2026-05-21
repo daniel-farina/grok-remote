@@ -543,7 +543,13 @@ export class AgentsSidebar {
     const topLevel: Agent[] = [];
     const buckets = new Map<string, Agent[]>();
     for (const a of visible) {
-      const fid = folderOfAgent.get(a.id);
+      let fid = folderOfAgent.get(a.id);
+      // Belt-and-suspenders: an archived agent must always live in the Archived
+      // folder, even if the backend folder side-effect lagged or the folder file
+      // is out of sync. Without this, archived agents fall to top level.
+      if (a.archived && fid !== ARCHIVED_FOLDER_ID && folderById.has(ARCHIVED_FOLDER_ID)) {
+        fid = ARCHIVED_FOLDER_ID;
+      }
       if (fid && folderById.has(fid)) {
         if (!buckets.has(fid)) buckets.set(fid, []);
         buckets.get(fid)!.push(a);
@@ -854,12 +860,21 @@ export class AgentsSidebar {
     const agentId = agent.id;
 
     const onPointerDown = (ev: PointerEvent): void => {
-      if (ev.button !== undefined && ev.button !== 0) return;
       const target = ev.target as HTMLElement | null;
+      const tgtTag = target ? `${target.tagName.toLowerCase()}.${target.className || ''}` : '(none)';
+      const matchedAction = target?.closest('.agent-row-action, input, select, textarea')?.tagName || null;
+      console.debug(`[drag] pointerdown id=${agentId} button=${ev.button} type=${ev.pointerType} target=${tgtTag} actionMatch=${matchedAction}`);
+      if (ev.button !== undefined && ev.button !== 0) {
+        console.debug(`[drag] press-skipped reason=not-primary-button button=${ev.button}`);
+        return;
+      }
       // Only the explicit action buttons (star, archive, restore, delete-forever)
       // and any input/select inside the row (rename) opt out of drag. The rest
       // of the row body, including the name text, should drag freely.
-      if (target && target.closest('.agent-row-action, input, select, textarea')) return;
+      if (target && target.closest('.agent-row-action, input, select, textarea')) {
+        console.debug(`[drag] press-skipped reason=action-or-form-field match=${matchedAction}`);
+        return;
+      }
       this._cancelDrag();
       const drag = {
         agentId,
@@ -898,19 +913,19 @@ export class AgentsSidebar {
       const moved = Math.hypot(dx, dy);
       if (!drag.active) {
         if (isArchived) {
-          // Mark moved so pointerup will skip the click branch; archived rows
-          // never start a drag.
           if (moved > MOUSE_DRAG_THRESH) drag.moved = true;
           return;
         }
         if (drag.pointerType === 'touch') {
-          // Touch: any movement before the long-press fires means "scroll".
-          if (moved > TOUCH_MOVE_THRESH) this._cancelDrag();
+          if (moved > TOUCH_MOVE_THRESH) {
+            console.debug(`[drag] cancel reason=touch-scroll-intent moved=${moved.toFixed(1)}`);
+            this._cancelDrag();
+          }
           return;
         }
-        // Mouse / pen: cross MOUSE_DRAG_THRESH on the X axis to start drag.
         if (Math.abs(dx) >= MOUSE_DRAG_THRESH || moved >= MOUSE_DRAG_THRESH * 2) {
           drag.moved = true;
+          console.debug(`[drag] activate id=${drag.agentId} startX=${drag.startX} startY=${drag.startY} dx=${dx.toFixed(1)} dy=${dy.toFixed(1)}`);
           this._activateDrag(ev.clientX, ev.clientY);
         }
         return;
@@ -928,15 +943,11 @@ export class AgentsSidebar {
       }
       if (drag.active) {
         const target = this._findDropTarget(ev.clientX, ev.clientY);
+        console.debug(`[drag] up dropOn=${target} id=${drag.agentId}`);
         this._endDrag();
         if (target) void this._assignAgentToFolder(drag.agentId, target);
         return;
       }
-      // No drag activated: treat as a click and select the row. We do this
-      // explicitly because there is no native onclick (we needed pointer
-      // capture to NOT swallow the click, but doing nothing leaves no
-      // selection at all on touch where browsers sometimes skip the
-      // synthesised click).
       const dt = performance.now() - drag.startTime;
       const dx = Math.abs(ev.clientX - drag.startX);
       const dy = Math.abs(ev.clientY - drag.startY);
@@ -946,7 +957,11 @@ export class AgentsSidebar {
         && dy < MOUSE_DRAG_THRESH;
       if (isClick) {
         const tgt = ev.target as HTMLElement | null;
-        if (tgt && tgt.closest('.agent-row-action, input, select, textarea')) return;
+        if (tgt && tgt.closest('.agent-row-action, input, select, textarea')) {
+          console.debug(`[drag] click-skipped reason=action-control`);
+          return;
+        }
+        console.debug(`[drag] click-select id=${agentId} dt=${dt.toFixed(0)}ms`);
         this._handleRowClick(agentId, ev);
       }
     };
@@ -954,6 +969,7 @@ export class AgentsSidebar {
     const onPointerCancel = (ev: PointerEvent): void => {
       const drag = this._drag;
       if (!drag || drag.pointerId !== ev.pointerId) return;
+      console.debug(`[drag] cancel reason=pointercancel id=${drag.agentId}`);
       this._cancelDrag();
     };
 
@@ -1047,12 +1063,15 @@ export class AgentsSidebar {
 
   private async _assignAgentToFolder(agentId: string, groupId: string): Promise<void> {
     const folderId = groupId === TOP_LEVEL_ID ? null : groupId;
+    console.debug(`[drag] assign id=${agentId} folder=${folderId}`);
     try {
       await api.agents.setFolder(agentId, folderId);
+      console.debug(`[drag] assign-ok id=${agentId} folder=${folderId}`);
       await this.refreshFolders();
       this.renderList();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      console.debug(`[drag] assign-fail id=${agentId} folder=${folderId} err=${msg}`);
       alert(`move failed: ${msg}`);
     }
   }
