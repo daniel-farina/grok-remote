@@ -3,7 +3,8 @@
 
 import { api } from '../../lib/api.js';
 import { MCP_REGISTRY, MCP_CATEGORIES, type McpRegistryEntry } from './mcp-registry.js';
-import { openRegistryPicker, type RegistryPickEntry, type RegistryRefreshResult } from './registry-picker.js';
+import { type RegistryPickEntry } from './registry-picker.js';
+import { openMcpPicker, type McpPickerHandle } from './mcp-picker.js';
 
 // Shape returned by the backend live-registry endpoint. Matches the
 // NormalizedEntry shape in lib/mcp-registry-upstream.ts.
@@ -603,6 +604,7 @@ function toPickEntry(e: McpRegistryEntry & { source?: string }): RegistryPickEnt
   };
 }
 
+
 function fromLive(le: LiveRegistryEntry): McpRegistryEntry {
   const env = le.env ? le.env.map(v => ({
     name: v.name,
@@ -635,18 +637,24 @@ function dedupeBySlug(entries: McpRegistryEntry[]): McpRegistryEntry[] {
 
 const STATIC_FALLBACK_ENTRIES: McpRegistryEntry[] = MCP_REGISTRY;
 
-async function loadLiveRegistry(): Promise<RegistryRefreshResult & { state: PickerState }> {
+interface LiveLoadResult {
+  entries: McpRegistryEntry[];
+  fetchedAt?: string;
+  state: PickerState;
+}
+
+async function loadLiveRegistry(): Promise<LiveLoadResult> {
   const resp = await api.mcp.getRegistry() as LiveRegistryResponse;
   if (resp && Array.isArray(resp.entries) && resp.entries.length) {
     const merged = dedupeBySlug(resp.entries.map(fromLive));
     const state: PickerState = { bySlug: new Map(merged.map(e => [e.slug, e])), source: 'live' };
-    return { entries: merged.map(toPickEntry), fetchedAt: resp.fetchedAt, count: merged.length, state };
+    return { entries: merged, fetchedAt: resp.fetchedAt, state };
   }
   const state: PickerState = {
     bySlug: new Map(STATIC_FALLBACK_ENTRIES.map(e => [e.slug, e])),
     source: 'static',
   };
-  return { entries: STATIC_FALLBACK_ENTRIES.map(e => toPickEntry({ ...e, source: 'static' })), state };
+  return { entries: STATIC_FALLBACK_ENTRIES, state };
 }
 
 function openMcpRegistryPicker(): void {
@@ -657,13 +665,14 @@ function openMcpRegistryPicker(): void {
     source: 'static',
   };
 
-  const handle = openRegistryPicker({
+  const handle: McpPickerHandle = openMcpPicker({
     title: 'MCP server registry',
-    groupLabel: 'category',
     totalLabel: 'servers',
-    entries: STATIC_FALLBACK_ENTRIES.map(e => toPickEntry({ ...e, source: 'static' })),
+    entries: STATIC_FALLBACK_ENTRIES,
     groupOrder: MCP_CATEGORIES,
     closeAfterAdd: true,
+    storageKey: 'grok-remote.mcp-picker.filters',
+    toPickEntry: (e) => toPickEntry({ ...e, source: pickerState.source === 'live' ? 'upstream' : 'static' }),
     onAdd: (slug) => {
       const entry = pickerState.bySlug.get(slug);
       if (entry) prefillMcpForm(entry);
@@ -676,7 +685,7 @@ function openMcpRegistryPicker(): void {
       const merged = dedupeBySlug(resp.entries.map(fromLive));
       pickerState = { bySlug: new Map(merged.map(e => [e.slug, e])), source: 'live' };
       return {
-        entries: merged.map(toPickEntry),
+        entries: merged,
         fetchedAt: resp.fetchedAt,
         count: merged.length,
       };
@@ -687,7 +696,7 @@ function openMcpRegistryPicker(): void {
     try {
       const live = await loadLiveRegistry();
       pickerState = live.state;
-      handle.update(live.entries, live.fetchedAt);
+      handle.setEntries(live.entries, live.fetchedAt);
     } catch {
       // keep the seed picker visible. user can still hit refresh.
     }

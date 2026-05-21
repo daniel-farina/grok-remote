@@ -17,6 +17,31 @@ export interface RegistryRefreshResult {
   count?: number;
 }
 
+export interface RegistryPickerSidebar {
+  // Called once when the picker is built; returns the rendered sidebar root.
+  // Sidebar owners drive filtering by mutating their own state and calling
+  // ctx.refresh() to re-run the (caller-supplied) filter pipeline.
+  render: (ctx: RegistryPickerSidebarCtx) => HTMLElement;
+  // Optional extra header element rendered above the result list (e.g. a
+  // sort dropdown). Receives the same ctx so it can also trigger refresh.
+  renderHeader?: (ctx: RegistryPickerSidebarCtx) => HTMLElement | null;
+  // Optional chip row rendered just below the search input.
+  renderChips?: (ctx: RegistryPickerSidebarCtx) => HTMLElement | null;
+  // Filter pipeline that runs against the raw entries array on every paint.
+  // Returning the entries unchanged is equivalent to no filter.
+  filter: (entries: RegistryPickEntry[], query: string) => RegistryPickEntry[];
+  // Optional override for the empty-state body. Useful for showing a
+  // "Reset filters" CTA when filters return zero results.
+  renderEmpty?: (ctx: RegistryPickerSidebarCtx) => HTMLElement;
+  // Optional status-bar suffix (e.g. "3 filters active").
+  statusSuffix?: () => string | null;
+}
+
+export interface RegistryPickerSidebarCtx {
+  refresh: () => void;
+  setSearch: (value: string) => void;
+}
+
 export interface OpenRegistryPickerOptions {
   title: string;
   groupLabel: string;
@@ -30,11 +55,15 @@ export interface OpenRegistryPickerOptions {
   onRefresh?: () => Promise<RegistryRefreshResult>;
   fetchedAt?: string;
   totalLabel?: string; // e.g. "servers"
+  sidebar?: RegistryPickerSidebar;
+  initialSearch?: string;
 }
 
 export interface RegistryPickerHandle {
   close: () => void;
   update: (entries: RegistryPickEntry[], fetchedAt?: string) => void;
+  getEntries: () => RegistryPickEntry[];
+  refresh: () => void;
 }
 
 export function openRegistryPicker(opts: OpenRegistryPickerOptions): RegistryPickerHandle {
@@ -42,6 +71,7 @@ export function openRegistryPicker(opts: OpenRegistryPickerOptions): RegistryPic
 
   const root = document.createElement('div');
   root.className = 'registry-picker';
+  if (opts.sidebar) root.classList.add('registry-picker--has-sidebar');
 
   const backdrop = document.createElement('div');
   backdrop.className = 'registry-picker__backdrop';
@@ -80,22 +110,70 @@ export function openRegistryPicker(opts: OpenRegistryPickerOptions): RegistryPic
   head.appendChild(headActions);
   card.appendChild(head);
 
+  const ctx: RegistryPickerSidebarCtx = {
+    refresh: () => paint(filter.value),
+    setSearch: (v: string) => { filter.value = v; paint(filter.value); },
+  };
+
+  const layout = document.createElement('div');
+  layout.className = 'registry-picker__layout';
+  card.appendChild(layout);
+
+  let sidebarRoot: HTMLElement | null = null;
+  let mobileToggleBtn: HTMLButtonElement | null = null;
+  if (opts.sidebar) {
+    sidebarRoot = opts.sidebar.render(ctx);
+    sidebarRoot.classList.add('registry-picker__sidebar');
+    layout.appendChild(sidebarRoot);
+  }
+
+  const main = document.createElement('div');
+  main.className = 'registry-picker__main';
+  layout.appendChild(main);
+
   const status = document.createElement('div');
   status.className = 'registry-picker__status';
-  card.appendChild(status);
+  main.appendChild(status);
 
   const filterRow = document.createElement('div');
   filterRow.className = 'registry-picker__filter';
+  if (opts.sidebar) {
+    mobileToggleBtn = document.createElement('button');
+    mobileToggleBtn.type = 'button';
+    mobileToggleBtn.className = 'mcp-btn registry-picker__filter-toggle';
+    mobileToggleBtn.textContent = 'Filter';
+    mobileToggleBtn.setAttribute('aria-expanded', 'false');
+    mobileToggleBtn.addEventListener('click', () => {
+      const open = root.classList.toggle('registry-picker--sidebar-open');
+      mobileToggleBtn!.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    filterRow.appendChild(mobileToggleBtn);
+  }
   const filter = document.createElement('input');
   filter.type = 'text';
   filter.placeholder = 'filter...';
   filter.autocomplete = 'off';
+  if (opts.initialSearch) filter.value = opts.initialSearch;
   filterRow.appendChild(filter);
-  card.appendChild(filterRow);
+  if (opts.sidebar?.renderHeader) {
+    const extra = opts.sidebar.renderHeader(ctx);
+    if (extra) {
+      extra.classList.add('registry-picker__filter-extra');
+      filterRow.appendChild(extra);
+    }
+  }
+  main.appendChild(filterRow);
+
+  let chipsRow: HTMLElement | null = null;
+  if (opts.sidebar?.renderChips) {
+    chipsRow = document.createElement('div');
+    chipsRow.className = 'registry-picker__chips';
+    main.appendChild(chipsRow);
+  }
 
   const body = document.createElement('div');
   body.className = 'registry-picker__body';
-  card.appendChild(body);
+  main.appendChild(body);
 
   function close(): void {
     document.removeEventListener('keydown', onKey);
@@ -133,7 +211,17 @@ export function openRegistryPicker(opts: OpenRegistryPickerOptions): RegistryPic
     }
   }
 
-  function paintStatus(errorMsg: string | null): void {
+  function filterEntries(query: string): RegistryPickEntry[] {
+    if (opts.sidebar) return opts.sidebar.filter(entries, query);
+    const q = query.trim().toLowerCase();
+    if (!q) return entries.slice();
+    return entries.filter(e => {
+      const hay = `${e.name} ${e.slug} ${e.description} ${e.group} ${(e.tags || []).join(' ')}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  function paintStatus(errorMsg: string | null, visibleCount?: number): void {
     status.replaceChildren();
     if (errorMsg) {
       status.classList.add('registry-picker__status--err');
@@ -142,40 +230,39 @@ export function openRegistryPicker(opts: OpenRegistryPickerOptions): RegistryPic
     }
     status.classList.remove('registry-picker__status--err');
     const total = entries.length;
-    const visible = countFiltered(filter.value);
+    const visible = typeof visibleCount === 'number' ? visibleCount : filterEntries(filter.value).length;
     const label = opts.totalLabel || 'entries';
     const parts: string[] = [];
     if (visible === total) parts.push(`${total} ${label}`);
     else parts.push(`showing ${visible} of ${total} ${label}`);
     if (fetchedAt) parts.push(`updated ${formatRelative(fetchedAt)}`);
+    const suffix = opts.sidebar?.statusSuffix?.();
+    if (suffix) parts.push(suffix);
     status.textContent = parts.join(' . ');
   }
 
-  function countFiltered(query: string): number {
-    const q = query.trim().toLowerCase();
-    if (!q) return entries.length;
-    let n = 0;
-    for (const e of entries) {
-      const hay = `${e.name} ${e.slug} ${e.description} ${e.group} ${(e.tags || []).join(' ')}`.toLowerCase();
-      if (hay.includes(q)) n++;
-    }
-    return n;
+  function paintChips(): void {
+    if (!chipsRow || !opts.sidebar?.renderChips) return;
+    chipsRow.replaceChildren();
+    const next = opts.sidebar.renderChips(ctx);
+    if (next) chipsRow.appendChild(next);
   }
 
   function paint(query: string): void {
     body.replaceChildren();
-    paintStatus(null);
-    const q = query.trim().toLowerCase();
-    const filtered = entries.filter(e => {
-      if (!q) return true;
-      const hay = `${e.name} ${e.slug} ${e.description} ${e.group} ${(e.tags || []).join(' ')}`.toLowerCase();
-      return hay.includes(q);
-    });
+    const filtered = filterEntries(query);
+    paintStatus(null, filtered.length);
+    paintChips();
     if (!filtered.length) {
-      const empty = document.createElement('p');
-      empty.className = 'registry-picker__empty';
-      empty.textContent = 'nothing matches that filter.';
-      body.appendChild(empty);
+      const empty = opts.sidebar?.renderEmpty ? opts.sidebar.renderEmpty(ctx) : null;
+      if (empty) {
+        body.appendChild(empty);
+      } else {
+        const fallback = document.createElement('p');
+        fallback.className = 'registry-picker__empty';
+        fallback.textContent = 'nothing matches that filter.';
+        body.appendChild(fallback);
+      }
       return;
     }
     const groups = new Map<string, RegistryPickEntry[]>();
@@ -279,6 +366,8 @@ export function openRegistryPicker(opts: OpenRegistryPickerOptions): RegistryPic
       if (when) fetchedAt = when;
       paint(filter.value);
     },
+    getEntries(): RegistryPickEntry[] { return entries; },
+    refresh(): void { paint(filter.value); },
   };
 }
 
