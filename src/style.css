@@ -518,6 +518,38 @@ body::before {
 }
 .agents-empty--err { color: var(--amber); }
 
+/* Footer that shows up only when the multi-selection is non-empty. Matches
+   the visual language of sidebar-tools without competing for attention. */
+.sidebar-multi {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  margin: 6px 0 4px;
+  border: 1px solid rgba(139, 122, 224, 0.45);
+  border-radius: 6px;
+  background: rgba(139, 122, 224, 0.10);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+.sidebar-multi[hidden] { display: none; }
+.sidebar-multi__label { letter-spacing: 0.04em; }
+.sidebar-multi__clear {
+  background: transparent;
+  border: 1px solid rgba(139, 122, 224, 0.55);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.sidebar-multi__clear:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
 .agent-item {
   border: 1px solid var(--border);
   background: var(--panel);
@@ -536,6 +568,17 @@ body::before {
 .agent-item--selected {
   border-color: var(--teal);
   background: rgba(94, 234, 212, 0.04);
+}
+/* Multi-select highlight: a soft purple wash + a clear left-edge bar in --blue,
+   so it reads as distinct from the teal "currently open" selection. */
+.agent-item--multi {
+  background: rgba(139, 122, 224, 0.14);
+  border-color: rgba(139, 122, 224, 0.55);
+  box-shadow: inset 3px 0 0 0 var(--blue);
+}
+.agent-item--multi.agent-item--selected {
+  background: rgba(139, 122, 224, 0.18);
+  border-color: var(--teal);
 }
 .agent-item-top {
   display: flex;

@@ -9,6 +9,7 @@
 import { api } from '../lib/api.js';
 import { el } from '../lib/render.js';
 import { fmtTokens } from '../lib/format.js';
+import { computeSelection } from './agents-selection.js';
 
 const STATUS_LABEL: Record<string, string> = {
   idle:         'idle',
@@ -100,12 +101,18 @@ export class AgentsSidebar {
   agents: Agent[];
   folders: Folder[];
   selectedId: string | null;
+  // Multi-selection (Ctrl/Cmd-click + Shift-click) is independent of selectedId,
+  // which still tracks the currently-open conversation.
+  multiSelection: Set<string>;
+  selectionAnchor: string | null;
   pollHandle: ReturnType<typeof setInterval> | null;
   sortKey: string;
   search: string;
   collapsed: Set<string>;
 
   activeList: HTMLElement;
+  multiSelectFooter: HTMLElement;
+  multiSelectLabel: HTMLElement;
   empty: HTMLElement;
   noMatch: HTMLElement;
   error: HTMLElement;
@@ -149,6 +156,8 @@ export class AgentsSidebar {
     this.agents = [];
     this.folders = [];
     this.selectedId = null;
+    this.multiSelection = new Set();
+    this.selectionAnchor = null;
     this.pollHandle = null;
     this.sortKey = loadSort();
     this.search  = loadSearch();
@@ -230,6 +239,18 @@ export class AgentsSidebar {
       ),
     ) as HTMLSelectElement;
 
+    this.multiSelectLabel = el('span', { class: 'sidebar-multi__label' }, '') as HTMLElement;
+    const clearBtn = el('button', {
+      class: 'sidebar-multi__clear',
+      type: 'button',
+      title: 'clear selection (Esc)',
+      onclick: (ev: MouseEvent) => { ev.stopPropagation(); this.clearMultiSelection(); },
+    }, 'clear') as HTMLButtonElement;
+    this.multiSelectFooter = el('div', { class: 'sidebar-multi', hidden: '' },
+      this.multiSelectLabel,
+      clearBtn,
+    ) as HTMLElement;
+
     this.root = el('aside', { class: 'sidebar' },
       el('div', { class: 'sidebar-head' },
         el('span', { class: 'sidebar-title' }, 'agents'),
@@ -248,7 +269,64 @@ export class AgentsSidebar {
       el('div', { class: 'sidebar-body' },
         this.activeList,
       ),
+      this.multiSelectFooter,
     ) as HTMLElement;
+
+    // Esc clears the multi-selection. Scoped to the sidebar root so we don't
+    // intercept Esc inside the chat composer or other modals.
+    this.root.addEventListener('keydown', (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape' && this.multiSelection.size > 0) {
+        ev.preventDefault();
+        this.clearMultiSelection();
+      }
+    });
+    // Make the root focusable for the Escape handler to fire.
+    if (!this.root.hasAttribute('tabindex')) this.root.setAttribute('tabindex', '-1');
+  }
+
+  clearMultiSelection(): void {
+    if (this.multiSelection.size === 0 && this.selectionAnchor == null) return;
+    this.multiSelection = new Set();
+    this.selectionAnchor = null;
+    this.renderList();
+  }
+
+  private _updateMultiFooter(): void {
+    const n = this.multiSelection.size;
+    if (n <= 1) {
+      this.multiSelectFooter.hidden = true;
+      return;
+    }
+    this.multiSelectFooter.hidden = false;
+    this.multiSelectLabel.textContent = `${n} selected`;
+  }
+
+  // Visible, sorted, search-filtered agent IDs in their on-screen order.
+  // Used as the ordering universe for shift-click range selection.
+  private _visibleOrderedIds(): string[] {
+    const visible = this._sortAgents(this.agents).filter((a) => this._matchesSearch(a));
+    const folderById = new Map<string, Folder>();
+    for (const f of this.folders) folderById.set(f.id, f);
+    const folderOfAgent = new Map<string, string>();
+    for (const f of this.folders) for (const aid of f.agentIds) folderOfAgent.set(aid, f.id);
+
+    if (this.folders.length === 0) return visible.map((a) => a.id);
+
+    const topLevel: string[] = [];
+    const buckets = new Map<string, string[]>();
+    for (const a of visible) {
+      const fid = folderOfAgent.get(a.id);
+      if (fid && folderById.has(fid)) {
+        if (!buckets.has(fid)) buckets.set(fid, []);
+        buckets.get(fid)!.push(a.id);
+      } else {
+        topLevel.push(a.id);
+      }
+    }
+    const ordered: string[] = [];
+    ordered.push(...topLevel);
+    for (const f of this.folders) ordered.push(...(buckets.get(f.id) || []));
+    return ordered;
   }
 
   private _sortAgents(list: Agent[]): Agent[] {
@@ -433,6 +511,18 @@ export class AgentsSidebar {
     if (this._drag) this._cancelDrag();
     this.activeList.replaceChildren();
     if (this.searchClearBtn) this.searchClearBtn.hidden = !this.search;
+    // Drop stale ids from multi-selection so the footer count stays accurate.
+    if (this.multiSelection.size > 0) {
+      const liveIds = new Set(this.agents.map((a) => a.id));
+      const before = this.multiSelection.size;
+      for (const id of [...this.multiSelection]) {
+        if (!liveIds.has(id)) this.multiSelection.delete(id);
+      }
+      if (before !== this.multiSelection.size && this.selectionAnchor && !liveIds.has(this.selectionAnchor)) {
+        this.selectionAnchor = null;
+      }
+    }
+    this._updateMultiFooter();
 
     if (errorMessage) {
       this.activeList.appendChild(el('div', { class: 'agents-empty agents-empty--err' },
@@ -617,7 +707,7 @@ export class AgentsSidebar {
     const dot = el('span', { class: `agent-dot agent-dot--${status}` });
 
     const starBtn = el('button', {
-      class: `agent-star${a.starred ? ' is-on' : ''}`,
+      class: `agent-star agent-row-action${a.starred ? ' is-on' : ''}`,
       title: a.starred ? 'unstar' : 'star',
       type: 'button',
       onclick: async (ev: MouseEvent) => {
@@ -648,7 +738,7 @@ export class AgentsSidebar {
     let closeArea: HTMLElement | null;
     if (!isArchived) {
       const archiveBtn = el('button', {
-        class: 'agent-archive',
+        class: 'agent-archive agent-row-action',
         type: 'button',
         title: 'archive (move to archived; you can restore or delete later)',
         onclick: async (ev: MouseEvent) => {
@@ -669,7 +759,7 @@ export class AgentsSidebar {
       closeArea = archiveBtn;
     } else {
       const restoreBtn = el('button', {
-        class: 'agent-restore',
+        class: 'agent-restore agent-row-action',
         type: 'button',
         title: 'restore from archive',
         onclick: async (ev: MouseEvent) => {
@@ -687,7 +777,7 @@ export class AgentsSidebar {
         },
       }, 'restore') as HTMLButtonElement;
       const deleteBtn = el('button', {
-        class: 'agent-delete-forever',
+        class: 'agent-delete-forever agent-row-action',
         type: 'button',
         title: 'delete forever (removes history + uploads)',
         onclick: async (ev: MouseEvent) => {
@@ -721,10 +811,12 @@ export class AgentsSidebar {
     if (inflightChip) metaChildren.push(inflightChip);
     if (tokenChip) metaChildren.push(tokenChip);
 
+    const isMulti = this.multiSelection.has(a.id);
     const item = el('div', {
       class: [
         'agent-item',
         isSelected     ? 'agent-item--selected' : '',
+        isMulti        ? 'agent-item--multi' : '',
         isDisconnected ? 'agent-item--off' : '',
         isArchived     ? 'agent-item--archived' : '',
         a.starred      ? 'agent-item--starred' : '',
@@ -764,8 +856,10 @@ export class AgentsSidebar {
     const onPointerDown = (ev: PointerEvent): void => {
       if (ev.button !== undefined && ev.button !== 0) return;
       const target = ev.target as HTMLElement | null;
-      // Interactive controls handle their own clicks; never start drag from one.
-      if (target && target.closest('button, input, select, textarea, a')) return;
+      // Only the explicit action buttons (star, archive, restore, delete-forever)
+      // and any input/select inside the row (rename) opt out of drag. The rest
+      // of the row body, including the name text, should drag freely.
+      if (target && target.closest('.agent-row-action, input, select, textarea')) return;
       this._cancelDrag();
       const drag = {
         agentId,
@@ -852,8 +946,8 @@ export class AgentsSidebar {
         && dy < MOUSE_DRAG_THRESH;
       if (isClick) {
         const tgt = ev.target as HTMLElement | null;
-        if (tgt && tgt.closest('button, input, select, textarea, a')) return;
-        this.select(agentId);
+        if (tgt && tgt.closest('.agent-row-action, input, select, textarea')) return;
+        this._handleRowClick(agentId, ev);
       }
     };
 
@@ -969,11 +1063,64 @@ export class AgentsSidebar {
     if (typeof this.onSelect === 'function') this.onSelect(id);
   }
 
+  private _handleRowClick(agentId: string, ev: PointerEvent | MouseEvent): void {
+    const modified = ev.ctrlKey || ev.metaKey || ev.shiftKey;
+    if (!modified) {
+      // Plain click: clear any multi-selection, then navigate.
+      if (this.multiSelection.size > 0) {
+        this.multiSelection = new Set();
+      }
+      this.selectionAnchor = agentId;
+      this.select(agentId);
+      return;
+    }
+    // Modifier click: extend/toggle multi-selection without navigating.
+    const order = this._visibleOrderedIds();
+    const seed = this.multiSelection.size > 0
+      ? this.multiSelection
+      : (this.selectedId ? new Set([this.selectedId]) : new Set<string>());
+    const { next, anchor } = computeSelection(
+      seed,
+      this.selectionAnchor || this.selectedId,
+      agentId,
+      { ctrlKey: ev.ctrlKey, metaKey: ev.metaKey, shiftKey: ev.shiftKey },
+      order,
+    );
+    this.multiSelection = next;
+    this.selectionAnchor = anchor;
+    // If the user collapsed back to exactly one row, treat it like a normal
+    // selection so the chat opens it.
+    if (this.multiSelection.size === 1) {
+      const only = [...this.multiSelection][0]!;
+      this.multiSelection = new Set();
+      this.selectedId = only;
+      this.renderList();
+      if (typeof this.onSelect === 'function') this.onSelect(only);
+      return;
+    }
+    this.renderList();
+  }
+
   private _showContextMenu(a: Agent, clientX: number, clientY: number): void {
     this._closeContextMenu();
 
-    const isArchived = !!a.archived;
-    const isStarred  = !!a.starred;
+    // Decide whether this menu acts on a single row or the multi-selection.
+    // Right-clicking outside the current multi-selection clears it and acts
+    // on the single clicked row, matching every familiar file manager.
+    let targetIds: string[];
+    if (this.multiSelection.size > 1 && this.multiSelection.has(a.id)) {
+      targetIds = [...this.multiSelection];
+    } else {
+      if (this.multiSelection.size > 0) {
+        this.multiSelection = new Set();
+        this.renderList();
+      }
+      targetIds = [a.id];
+    }
+    const targetAgents = targetIds
+      .map((id) => this.agents.find((x) => x.id === id))
+      .filter((x): x is Agent => !!x);
+    const bulk = targetAgents.length > 1;
 
     const items: HTMLElement[] = [];
 
@@ -992,9 +1139,21 @@ export class AgentsSidebar {
 
     const mkSep = (): HTMLElement => el('div', { class: 'ctx-menu__sep' }) as HTMLElement;
 
-    items.push(mkItem(isStarred ? 'Unstar' : 'Star', async () => {
+    // Majority-vote on the current starred / archived state so the action
+    // label reads naturally for the bulk case ("Star all" if most aren't
+    // already starred).
+    const starredCount   = targetAgents.filter((x) => !!x.starred).length;
+    const archivedCount  = targetAgents.filter((x) => !!x.archived).length;
+    const majorityStarred  = starredCount  > targetAgents.length / 2;
+    const majorityArchived = archivedCount > targetAgents.length / 2;
+
+    const starLabel = bulk
+      ? (majorityStarred ? `Unstar ${targetAgents.length}` : `Star ${targetAgents.length}`)
+      : (a.starred ? 'Unstar' : 'Star');
+    items.push(mkItem(starLabel, async () => {
+      const nextStarred = bulk ? !majorityStarred : !a.starred;
       try {
-        await api.updateAgent(a.id, { starred: !isStarred });
+        await Promise.all(targetAgents.map((x) => api.updateAgent(x.id, { starred: nextStarred })));
         await this.refresh();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -1002,12 +1161,14 @@ export class AgentsSidebar {
       }
     }));
 
-    items.push(mkItem('Rename', () => {
-      const node = this.activeList.querySelector<HTMLElement>(
-        `.agent-item[data-agent-id="${CSS.escape(a.id)}"] .agent-name`,
-      );
-      if (node) this.beginInlineRenameAgent(a, node);
-    }));
+    if (!bulk) {
+      items.push(mkItem('Rename', () => {
+        const node = this.activeList.querySelector<HTMLElement>(
+          `.agent-item[data-agent-id="${CSS.escape(a.id)}"] .agent-name`,
+        );
+        if (node) this.beginInlineRenameAgent(a, node);
+      }));
+    }
 
     items.push(mkSep());
 
@@ -1016,15 +1177,18 @@ export class AgentsSidebar {
     // folders (Archived) are excluded; "Archive" handles that case.
     const moveTargets = this.folders.filter((f) => !f.system);
     const currentFolder = (() => {
+      // For single-row, indicate the folder the row currently lives in.
+      if (bulk) return null;
       for (const f of this.folders) if (f.agentIds.includes(a.id)) return f.id;
       return null;
     })();
 
     if (moveTargets.length > 0 || currentFolder) {
-      items.push(el('div', { class: 'ctx-menu__heading' }, 'Move to') as HTMLElement);
-      items.push(mkItem(`(no folder)${currentFolder ? '' : '  •'}`, async () => {
+      const heading = bulk ? `Move ${targetAgents.length} to` : 'Move to';
+      items.push(el('div', { class: 'ctx-menu__heading' }, heading) as HTMLElement);
+      items.push(mkItem(`(no folder)${!bulk && !currentFolder ? '  •' : ''}`, async () => {
         try {
-          await api.agents.setFolder(a.id, null);
+          await Promise.all(targetAgents.map((x) => api.agents.setFolder(x.id, null)));
           await this.refreshFolders();
           this.renderList();
         } catch (e) {
@@ -1033,10 +1197,10 @@ export class AgentsSidebar {
         }
       }));
       for (const f of moveTargets) {
-        const label = currentFolder === f.id ? `${f.name}  •` : f.name;
+        const label = (!bulk && currentFolder === f.id) ? `${f.name}  •` : f.name;
         items.push(mkItem(label, async () => {
           try {
-            await api.agents.setFolder(a.id, f.id);
+            await Promise.all(targetAgents.map((x) => api.agents.setFolder(x.id, f.id)));
             await this.refreshFolders();
             this.renderList();
           } catch (e) {
@@ -1048,10 +1212,18 @@ export class AgentsSidebar {
       items.push(mkSep());
     }
 
-    items.push(mkItem(isArchived ? 'Unarchive' : 'Archive', async () => {
+    const archiveLabel = bulk
+      ? (majorityArchived ? `Unarchive ${targetAgents.length}` : `Archive ${targetAgents.length}`)
+      : (a.archived ? 'Unarchive' : 'Archive');
+    items.push(mkItem(archiveLabel, async () => {
+      const nextArchived = bulk ? !majorityArchived : !a.archived;
       try {
-        await api.updateAgent(a.id, { archived: !isArchived });
-        if (!isArchived && this.selectedId === a.id) this.selectedId = null;
+        await Promise.all(targetAgents.map((x) => api.updateAgent(x.id, { archived: nextArchived })));
+        if (nextArchived) {
+          for (const x of targetAgents) {
+            if (this.selectedId === x.id) this.selectedId = null;
+          }
+        }
         await this.refresh();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -1059,31 +1231,42 @@ export class AgentsSidebar {
       }
     }));
 
-    items.push(mkItem('Copy id', async () => {
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(a.id);
-        } else {
-          const ta = document.createElement('textarea');
-          ta.value = a.id;
-          document.body.appendChild(ta);
-          ta.select();
-          try { document.execCommand('copy'); } catch { /* ignore */ }
-          document.body.removeChild(ta);
+    if (!bulk) {
+      items.push(mkItem('Copy id', async () => {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(a.id);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = a.id;
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); } catch { /* ignore */ }
+            document.body.removeChild(ta);
+          }
+        } catch {
+          alert('copy failed');
         }
-      } catch {
-        alert('copy failed');
-      }
-    }));
+      }));
+    }
 
     items.push(mkSep());
 
-    items.push(mkItem('Delete…', async () => {
-      if (!confirm(`Delete "${a.name || a.id}" forever?\nThis removes its history and uploaded files. Cannot be undone.`)) return;
+    const deleteLabel = bulk ? `Delete ${targetAgents.length}…` : 'Delete…';
+    items.push(mkItem(deleteLabel, async () => {
+      const prompt = bulk
+        ? `Delete ${targetAgents.length} conversations?\nThis removes their history and uploaded files. Cannot be undone.`
+        : `Delete "${a.name || a.id}" forever?\nThis removes its history and uploaded files. Cannot be undone.`;
+      if (!confirm(prompt)) return;
       try {
-        await api.deleteAgent(a.id);
-        if (typeof this.onDelete === 'function') this.onDelete(a.id);
-        if (this.selectedId === a.id) this.selectedId = null;
+        await Promise.all(targetAgents.map((x) => api.deleteAgent(x.id)));
+        if (typeof this.onDelete === 'function') {
+          for (const x of targetAgents) this.onDelete(x.id);
+        }
+        for (const x of targetAgents) {
+          if (this.selectedId === x.id) this.selectedId = null;
+        }
+        if (bulk) this.multiSelection = new Set();
         await this.refresh();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
