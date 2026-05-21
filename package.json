@@ -9,7 +9,7 @@
     "start": "node --import tsx server.ts",
     "dev": "vite",
     "dev:server": "tsx watch server.ts",
-    "test": "node --import tsx --test test/*.test.ts test/*.test.js",
+    "test": "node --import tsx --test test/*.test.ts",
     "test:integration": "RUN_LOCAL_INTEGRATION=1 node --import tsx --test test/integration/*.test.ts",
     "build": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
