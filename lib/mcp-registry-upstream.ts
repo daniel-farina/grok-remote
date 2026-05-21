@@ -194,7 +194,11 @@ const CATEGORY_RULES: Array<{ test: RegExp; category: string }> = [
 ];
 
 function categorize(name: string, description: string): string {
-  const hay = `${name} ${description}`.toLowerCase();
+  // Only the last segment of the name plus the description. Otherwise the
+  // very common "io.github.*" prefix swallows the heuristic.
+  const slash = name.lastIndexOf('/');
+  const leaf = slash >= 0 ? name.slice(slash + 1) : name;
+  const hay = `${leaf} ${description}`.toLowerCase();
   for (const rule of CATEGORY_RULES) {
     if (rule.test.test(hay)) return rule.category;
   }
