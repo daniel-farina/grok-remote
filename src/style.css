@@ -9368,3 +9368,46 @@ body::before {
   .registry-picker__filter-toggle { display: inline-flex; }
 }
 
+.registry-item__kind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  background: var(--bg-soft);
+  color: var(--muted);
+  cursor: help;
+}
+.registry-item__kind-badge-icon {
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+.registry-item__kind-badge--local {
+  color: var(--muted, #a0a0a0);
+  border-color: var(--border-2, #3a3a3a);
+  background: var(--bg-soft, #1c1c1c);
+}
+.registry-item__kind-badge--api-wrapper {
+  color: #d6a458;
+  border-color: rgba(214, 164, 88, 0.55);
+  background: rgba(214, 164, 88, 0.10);
+}
+.registry-item__kind-badge--remote {
+  color: #6aa9ee;
+  border-color: rgba(106, 169, 238, 0.55);
+  background: rgba(106, 169, 238, 0.10);
+}
+.registry-item .registry-item__tag {
+  font-size: 9px;
+  opacity: 0.7;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+}
+

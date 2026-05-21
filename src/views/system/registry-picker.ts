@@ -9,6 +9,14 @@ export interface RegistryPickEntry {
   official?: boolean;
   envHints?: string[];
   docsUrl?: string;
+  kindBadge?: RegistryItemKindBadge;
+}
+
+export interface RegistryItemKindBadge {
+  kind: string;
+  label: string;
+  icon?: string;
+  tooltip?: string;
 }
 
 export interface RegistryRefreshResult {
@@ -297,6 +305,22 @@ export function openRegistryPicker(opts: OpenRegistryPickerOptions): RegistryPic
     title.className = 'registry-item__title';
     title.textContent = e.name;
     itemHead.appendChild(title);
+    if (e.kindBadge) {
+      const kb = document.createElement('span');
+      kb.className = `registry-item__kind-badge registry-item__kind-badge--${e.kindBadge.kind}`;
+      if (e.kindBadge.tooltip) kb.title = e.kindBadge.tooltip;
+      if (e.kindBadge.icon) {
+        const icon = document.createElement('span');
+        icon.className = 'registry-item__kind-badge-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = e.kindBadge.icon;
+        kb.appendChild(icon);
+      }
+      const txt = document.createElement('span');
+      txt.textContent = e.kindBadge.label;
+      kb.appendChild(txt);
+      itemHead.appendChild(kb);
+    }
     if (e.official) {
       const badge = document.createElement('span');
       badge.className = 'registry-item__badge';

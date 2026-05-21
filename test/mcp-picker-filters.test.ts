@@ -6,10 +6,12 @@ import {
   computeCounts,
   defaultFilters,
   classifyPackageSource,
+  classifyServerKind,
   activeFilterCount,
   serializeFilters,
   deserializeFilters,
   type PickerFilters,
+  type ServerKind,
 } from '../src/views/system/registry-filters.js';
 import type { McpRegistryEntry } from '../src/views/system/mcp-registry.js';
 
@@ -192,4 +194,85 @@ test('deserializeFilters falls back to defaults on bad input', () => {
   assert.equal(bogus.officialMode, 'all');
   assert.equal(bogus.sort, 'name-asc');
   assert.equal(bogus.transports.size, 0);
+});
+
+test('classifyServerKind: stdio + no env -> local', () => {
+  const e = entry({ name: 'a', slug: 'a', transport: 'stdio', command: 'npx', args: ['-y', 'pkg'] });
+  assert.equal(classifyServerKind(e), 'local');
+});
+
+test('classifyServerKind: stdio + empty env array -> local', () => {
+  const e = entry({ name: 'a', slug: 'a', transport: 'stdio', command: 'npx', env: [] });
+  assert.equal(classifyServerKind(e), 'local');
+});
+
+test('classifyServerKind: stdio + required env -> api-wrapper', () => {
+  const e = entry({
+    name: 'g', slug: 'g', transport: 'stdio', command: 'npx',
+    env: [{ name: 'GITHUB_PERSONAL_ACCESS_TOKEN', required: true }],
+  });
+  assert.equal(classifyServerKind(e), 'api-wrapper');
+});
+
+test('classifyServerKind: http or sse transport -> remote', () => {
+  const http = entry({ name: 'h', slug: 'h', transport: 'http', url: 'https://x', command: undefined });
+  const sse = entry({ name: 's', slug: 's', transport: 'sse', url: 'https://y', command: undefined });
+  assert.equal(classifyServerKind(http), 'remote');
+  assert.equal(classifyServerKind(sse), 'remote');
+});
+
+test('classifyServerKind: missing command but url present -> remote (defensive)', () => {
+  // Even if transport is declared stdio, a missing command + present url is a
+  // remote service config that someone forgot to set transport on.
+  const e = entry({ name: 'x', slug: 'x', transport: 'stdio', command: undefined, args: undefined, url: 'https://x' });
+  assert.equal(classifyServerKind(e), 'remote');
+});
+
+test('classifyServerKind: http transport keeps remote even when env is set', () => {
+  const e = entry({
+    name: 'r', slug: 'r', transport: 'http', url: 'https://x', command: undefined,
+    env: [{ name: 'TOKEN', required: true }],
+  });
+  assert.equal(classifyServerKind(e), 'remote');
+});
+
+test('kind filter narrows the result list', () => {
+  // FIXTURE distribution: alpha=local, bravo=local, charlie=remote, delta=remote, echo=api-wrapper, foxtrot=local
+  const localOnly = applyFilters(FIXTURE, { ...defaultFilters(), kinds: new Set<ServerKind>(['local']) });
+  assert.deepEqual(localOnly.map(e => e.slug).sort(), ['alpha', 'bravo', 'foxtrot']);
+
+  const apiWrapper = applyFilters(FIXTURE, { ...defaultFilters(), kinds: new Set<ServerKind>(['api-wrapper']) });
+  assert.deepEqual(apiWrapper.map(e => e.slug).sort(), ['echo']);
+
+  const remote = applyFilters(FIXTURE, { ...defaultFilters(), kinds: new Set<ServerKind>(['remote']) });
+  assert.deepEqual(remote.map(e => e.slug).sort(), ['charlie', 'delta']);
+
+  const local_plus_remote = applyFilters(FIXTURE, {
+    ...defaultFilters(),
+    kinds: new Set<ServerKind>(['local', 'remote']),
+  });
+  assert.deepEqual(local_plus_remote.map(e => e.slug).sort(), ['alpha', 'bravo', 'charlie', 'delta', 'foxtrot']);
+});
+
+test('computeCounts: kinds facet shows totals across the fixture', () => {
+  const counts = computeCounts(FIXTURE, defaultFilters());
+  assert.equal(counts.kinds.local, 3);
+  assert.equal(counts.kinds['api-wrapper'], 1);
+  assert.equal(counts.kinds.remote, 2);
+});
+
+test('activeFilterCount picks up the kind axis', () => {
+  const f = defaultFilters();
+  assert.equal(activeFilterCount(f), 0);
+  f.kinds = new Set<ServerKind>(['local']);
+  assert.equal(activeFilterCount(f), 1);
+});
+
+test('kind state round-trips through serialize/deserialize', () => {
+  const f = defaultFilters();
+  f.kinds = new Set<ServerKind>(['local', 'remote']);
+  const back = deserializeFilters(serializeFilters(f));
+  assert.deepEqual(Array.from(back.kinds).sort(), ['local', 'remote']);
+  const bogus = deserializeFilters(JSON.stringify({ kinds: ['nope', 'local'] }));
+  assert.deepEqual(Array.from(bogus.kinds), ['local']);
 });

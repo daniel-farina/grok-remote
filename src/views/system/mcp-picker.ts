@@ -17,6 +17,7 @@ import {
   defaultFilters,
   deserializeFilters,
   PACKAGE_SOURCES,
+  SERVER_KINDS,
   serializeFilters,
   TRANSPORTS,
   type EnvMode,
@@ -24,6 +25,7 @@ import {
   type PackageSource,
   type PickerFilters,
   type RemoteMode,
+  type ServerKind,
   type SortMode,
   type TransportKind,
 } from './registry-filters.js';
@@ -46,6 +48,7 @@ const COLLAPSE_STATE_KEY_SUFFIX = '.collapsed';
 
 interface CollapseState {
   category: boolean;
+  kind: boolean;
   transport: boolean;
   package: boolean;
   toggles: boolean;
@@ -53,6 +56,7 @@ interface CollapseState {
 
 const DEFAULT_COLLAPSE: CollapseState = {
   category: false,
+  kind: false,
   transport: false,
   package: false,
   toggles: false,
@@ -66,6 +70,7 @@ function readCollapse(key: string | undefined): CollapseState {
     const obj = JSON.parse(raw) as Partial<CollapseState>;
     return {
       category: typeof obj.category === 'boolean' ? obj.category : false,
+      kind: typeof obj.kind === 'boolean' ? obj.kind : false,
       transport: typeof obj.transport === 'boolean' ? obj.transport : false,
       package: typeof obj.package === 'boolean' ? obj.package : false,
       toggles: typeof obj.toggles === 'boolean' ? obj.toggles : false,
@@ -116,6 +121,12 @@ const TRANSPORT_LABELS: Record<TransportKind, string> = {
   sse: 'sse',
 };
 
+const SERVER_KIND_LABELS: Record<ServerKind, string> = {
+  local: 'local',
+  'api-wrapper': 'api wrapper',
+  remote: 'remote',
+};
+
 export interface McpPickerHandle {
   close: () => void;
   refresh: () => void;
@@ -158,6 +169,7 @@ export function openMcpPicker(opts: McpPickerOptions): McpPickerHandle {
     const nodes: HTMLElement[] = [];
 
     nodes.push(makeCategorySection(counts.categories));
+    nodes.push(makeServerKindSection(counts.kinds));
     nodes.push(makeTransportSection(counts.transports));
     nodes.push(makePackageSourceSection(counts.packageSources));
     nodes.push(makeTogglesSection(counts.totals));
@@ -172,6 +184,7 @@ export function openMcpPicker(opts: McpPickerOptions): McpPickerHandle {
         category: fresh.category,
         transports: new Set<TransportKind>(),
         packageSources: new Set<PackageSource>(),
+        kinds: new Set<ServerKind>(),
         officialMode: fresh.officialMode,
         envMode: fresh.envMode,
         remoteMode: fresh.remoteMode,
@@ -261,6 +274,25 @@ export function openMcpPicker(opts: McpPickerOptions): McpPickerHandle {
     row.appendChild(c);
 
     return row;
+  }
+
+  function makeServerKindSection(counts: Record<ServerKind, number>): HTMLElement {
+    return makeSection('Server kind', 'kind', () => {
+      const wrap = document.createElement('div');
+      for (const k of SERVER_KINDS) {
+        wrap.appendChild(buildCheckboxRow(
+          SERVER_KIND_LABELS[k],
+          counts[k] || 0,
+          filters.kinds.has(k),
+          (checked) => {
+            if (checked) filters.kinds.add(k);
+            else filters.kinds.delete(k);
+            refreshAll();
+          },
+        ));
+      }
+      return wrap;
+    });
   }
 
   function makeTransportSection(counts: Record<TransportKind, number>): HTMLElement {
@@ -414,6 +446,13 @@ export function openMcpPicker(opts: McpPickerOptions): McpPickerHandle {
         onRemove: () => { filters.packageSources.clear(); refreshAll(); },
       });
     }
+    if (filters.kinds.size) {
+      const list = Array.from(filters.kinds).map(k => SERVER_KIND_LABELS[k]).join(', ');
+      chips.push({
+        label: `kind: ${list}`,
+        onRemove: () => { filters.kinds.clear(); refreshAll(); },
+      });
+    }
     if (filters.officialMode !== 'all') {
       chips.push({
         label: `official: ${filters.officialMode}`,
@@ -490,6 +529,7 @@ export function openMcpPicker(opts: McpPickerOptions): McpPickerHandle {
         category: null,
         transports: new Set<TransportKind>(),
         packageSources: new Set<PackageSource>(),
+        kinds: new Set<ServerKind>(),
         officialMode: 'all',
         envMode: 'all',
         remoteMode: 'all',

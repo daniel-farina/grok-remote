@@ -9,11 +9,13 @@ export type OfficialMode = 'all' | 'only' | 'hide';
 export type EnvMode = 'all' | 'with' | 'without';
 export type RemoteMode = 'all' | 'remote' | 'stdio-only';
 export type SortMode = 'name-asc' | 'name-desc' | 'category' | 'official';
+export type ServerKind = 'local' | 'api-wrapper' | 'remote';
 
 export interface PickerFilters {
   category: string | null;
   transports: Set<TransportKind>;
   packageSources: Set<PackageSource>;
+  kinds: Set<ServerKind>;
   officialMode: OfficialMode;
   envMode: EnvMode;
   remoteMode: RemoteMode;
@@ -25,17 +27,20 @@ export interface PickerCounts {
   categories: Record<string, number>;
   transports: Record<TransportKind, number>;
   packageSources: Record<PackageSource, number>;
+  kinds: Record<ServerKind, number>;
   totals: { official: number; withEnv: number; remote: number };
 }
 
 const TRANSPORT_VALUES: readonly TransportKind[] = ['stdio', 'http', 'sse'];
 const PACKAGE_SOURCE_VALUES: readonly PackageSource[] = ['npm', 'docker', 'python', 'go', 'other'];
+const SERVER_KIND_VALUES: readonly ServerKind[] = ['local', 'api-wrapper', 'remote'];
 
 export function defaultFilters(): PickerFilters {
   return {
     category: null,
     transports: new Set(),
     packageSources: new Set(),
+    kinds: new Set(),
     officialMode: 'all',
     envMode: 'all',
     remoteMode: 'all',
@@ -63,6 +68,13 @@ export function isRemote(entry: McpRegistryEntry): boolean {
   return entry.transport === 'http' || entry.transport === 'sse';
 }
 
+export function classifyServerKind(entry: McpRegistryEntry): ServerKind {
+  if (entry.transport === 'http' || entry.transport === 'sse') return 'remote';
+  const hasCommand = typeof entry.command === 'string' && entry.command.trim().length > 0;
+  if (!hasCommand && typeof entry.url === 'string' && entry.url.trim().length > 0) return 'remote';
+  return hasEnv(entry) ? 'api-wrapper' : 'local';
+}
+
 function matchesSearch(entry: McpRegistryEntry, query: string): boolean {
   if (!query) return true;
   const q = query.trim().toLowerCase();
@@ -84,6 +96,11 @@ function matchesTransport(entry: McpRegistryEntry, set: Set<TransportKind>): boo
 function matchesPackageSource(entry: McpRegistryEntry, set: Set<PackageSource>): boolean {
   if (!set || set.size === 0) return true;
   return set.has(classifyPackageSource(entry));
+}
+
+function matchesKind(entry: McpRegistryEntry, set: Set<ServerKind>): boolean {
+  if (!set || set.size === 0) return true;
+  return set.has(classifyServerKind(entry));
 }
 
 function matchesOfficial(entry: McpRegistryEntry, mode: OfficialMode): boolean {
@@ -132,6 +149,7 @@ export function applyFilters(entries: McpRegistryEntry[], f: PickerFilters): Mcp
     matchesCategory(e, f.category) &&
     matchesTransport(e, f.transports) &&
     matchesPackageSource(e, f.packageSources) &&
+    matchesKind(e, f.kinds) &&
     matchesOfficial(e, f.officialMode) &&
     matchesEnv(e, f.envMode) &&
     matchesRemote(e, f.remoteMode) &&
@@ -147,6 +165,7 @@ export function computeCounts(entries: McpRegistryEntry[], f: PickerFilters): Pi
   const categories: Record<string, number> = {};
   const transports: Record<TransportKind, number> = { stdio: 0, http: 0, sse: 0 };
   const packageSources: Record<PackageSource, number> = { npm: 0, docker: 0, python: 0, go: 0, other: 0 };
+  const kinds: Record<ServerKind, number> = { local: 0, 'api-wrapper': 0, remote: 0 };
   const totals = { official: 0, withEnv: 0, remote: 0 };
 
   for (const e of entries) {
@@ -154,40 +173,46 @@ export function computeCounts(entries: McpRegistryEntry[], f: PickerFilters): Pi
     const passCategory = matchesCategory(e, f.category);
     const passTransport = matchesTransport(e, f.transports);
     const passPkg = matchesPackageSource(e, f.packageSources);
+    const passKind = matchesKind(e, f.kinds);
     const passOfficial = matchesOfficial(e, f.officialMode);
     const passEnv = matchesEnv(e, f.envMode);
     const passRemote = matchesRemote(e, f.remoteMode);
 
-    const otherPasses = passSearch && passTransport && passPkg && passOfficial && passEnv && passRemote;
+    const otherPasses = passSearch && passTransport && passPkg && passKind && passOfficial && passEnv && passRemote;
     if (otherPasses) {
       categories[e.category] = (categories[e.category] || 0) + 1;
     }
 
-    if (passSearch && passCategory && passPkg && passOfficial && passEnv && passRemote) {
+    if (passSearch && passCategory && passPkg && passKind && passOfficial && passEnv && passRemote) {
       transports[e.transport] = (transports[e.transport] || 0) + 1;
     }
 
-    if (passSearch && passCategory && passTransport && passOfficial && passEnv && passRemote) {
+    if (passSearch && passCategory && passTransport && passKind && passOfficial && passEnv && passRemote) {
       const src = classifyPackageSource(e);
       packageSources[src] = (packageSources[src] || 0) + 1;
     }
 
-    if (passSearch && passCategory && passTransport && passPkg && passEnv && passRemote) {
+    if (passSearch && passCategory && passTransport && passPkg && passOfficial && passEnv && passRemote) {
+      const k = classifyServerKind(e);
+      kinds[k] = (kinds[k] || 0) + 1;
+    }
+
+    if (passSearch && passCategory && passTransport && passPkg && passKind && passEnv && passRemote) {
       if (e.official) totals.official++;
     }
-    if (passSearch && passCategory && passTransport && passPkg && passOfficial && passRemote) {
+    if (passSearch && passCategory && passTransport && passPkg && passKind && passOfficial && passRemote) {
       if (hasEnv(e)) totals.withEnv++;
     }
-    if (passSearch && passCategory && passTransport && passPkg && passOfficial && passEnv) {
+    if (passSearch && passCategory && passTransport && passPkg && passKind && passOfficial && passEnv) {
       if (isRemote(e)) totals.remote++;
     }
   }
 
-  // Ensure every transport / source key exists even when zero.
   for (const t of TRANSPORT_VALUES) if (!(t in transports)) transports[t] = 0;
   for (const s of PACKAGE_SOURCE_VALUES) if (!(s in packageSources)) packageSources[s] = 0;
+  for (const k of SERVER_KIND_VALUES) if (!(k in kinds)) kinds[k] = 0;
 
-  return { categories, transports, packageSources, totals };
+  return { categories, transports, packageSources, kinds, totals };
 }
 
 export function activeFilterCount(f: PickerFilters): number {
@@ -195,6 +220,7 @@ export function activeFilterCount(f: PickerFilters): number {
   if (f.category) n++;
   if (f.transports.size > 0) n++;
   if (f.packageSources.size > 0) n++;
+  if (f.kinds.size > 0) n++;
   if (f.officialMode !== 'all') n++;
   if (f.envMode !== 'all') n++;
   if (f.remoteMode !== 'all') n++;
@@ -207,6 +233,7 @@ export function serializeFilters(f: PickerFilters): string {
     category: f.category,
     transports: Array.from(f.transports),
     packageSources: Array.from(f.packageSources),
+    kinds: Array.from(f.kinds),
     officialMode: f.officialMode,
     envMode: f.envMode,
     remoteMode: f.remoteMode,
@@ -223,6 +250,7 @@ export function deserializeFilters(raw: string | null | undefined): PickerFilter
       category: string | null;
       transports: TransportKind[];
       packageSources: PackageSource[];
+      kinds: ServerKind[];
       officialMode: OfficialMode;
       envMode: EnvMode;
       remoteMode: RemoteMode;
@@ -232,6 +260,7 @@ export function deserializeFilters(raw: string | null | undefined): PickerFilter
     if (typeof obj.category === 'string' || obj.category === null) base.category = obj.category;
     if (Array.isArray(obj.transports)) base.transports = new Set(obj.transports.filter(t => TRANSPORT_VALUES.includes(t)));
     if (Array.isArray(obj.packageSources)) base.packageSources = new Set(obj.packageSources.filter(s => PACKAGE_SOURCE_VALUES.includes(s)));
+    if (Array.isArray(obj.kinds)) base.kinds = new Set(obj.kinds.filter(k => SERVER_KIND_VALUES.includes(k)));
     if (obj.officialMode === 'all' || obj.officialMode === 'only' || obj.officialMode === 'hide') base.officialMode = obj.officialMode;
     if (obj.envMode === 'all' || obj.envMode === 'with' || obj.envMode === 'without') base.envMode = obj.envMode;
     if (obj.remoteMode === 'all' || obj.remoteMode === 'remote' || obj.remoteMode === 'stdio-only') base.remoteMode = obj.remoteMode;
@@ -245,3 +274,4 @@ export function deserializeFilters(raw: string | null | undefined): PickerFilter
 
 export const TRANSPORTS: readonly TransportKind[] = TRANSPORT_VALUES;
 export const PACKAGE_SOURCES: readonly PackageSource[] = PACKAGE_SOURCE_VALUES;
+export const SERVER_KINDS: readonly ServerKind[] = SERVER_KIND_VALUES;

@@ -3,8 +3,9 @@
 
 import { api } from '../../lib/api.js';
 import { MCP_REGISTRY, MCP_CATEGORIES, type McpRegistryEntry } from './mcp-registry.js';
-import { type RegistryPickEntry } from './registry-picker.js';
+import { type RegistryPickEntry, type RegistryItemKindBadge } from './registry-picker.js';
 import { openMcpPicker, type McpPickerHandle } from './mcp-picker.js';
+import { classifyServerKind, type ServerKind } from './registry-filters.js';
 
 // Shape returned by the backend live-registry endpoint. Matches the
 // NormalizedEntry shape in lib/mcp-registry-upstream.ts.
@@ -589,9 +590,34 @@ interface PickerState {
   source: 'live' | 'static';
 }
 
+const KIND_BADGE_META: Record<ServerKind, { label: string; icon?: string; tooltip: string }> = {
+  'local': {
+    label: 'local',
+    tooltip: 'Runs locally as a subprocess. No network calls.',
+  },
+  'api-wrapper': {
+    label: 'api wrapper',
+    icon: '⚙',
+    tooltip: 'Runs locally but talks to a third-party API. Requires credentials.',
+  },
+  'remote': {
+    label: 'remote',
+    icon: '☁',
+    tooltip: 'Hosted MCP service. Connects over HTTP or SSE.',
+  },
+};
+
 function toPickEntry(e: McpRegistryEntry & { source?: string }): RegistryPickEntry {
   const tags: string[] = [e.transport];
   if (e.source === 'static') tags.push('fallback');
+  const kind = classifyServerKind(e);
+  const meta = KIND_BADGE_META[kind];
+  const kindBadge: RegistryItemKindBadge = {
+    kind,
+    label: meta.label,
+    tooltip: meta.tooltip,
+    ...(meta.icon ? { icon: meta.icon } : {}),
+  };
   return {
     slug: e.slug,
     name: e.name,
@@ -601,6 +627,7 @@ function toPickEntry(e: McpRegistryEntry & { source?: string }): RegistryPickEnt
     official: e.official,
     envHints: (e.env || []).map(v => `${v.required ? 'required' : 'optional'} env: ${v.name}${v.placeholder ? ` (${v.placeholder})` : ''}`),
     docsUrl: e.url_docs,
+    kindBadge,
   };
 }
 
