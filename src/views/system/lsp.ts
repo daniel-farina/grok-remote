@@ -20,6 +20,8 @@ interface LspServer {
   root_markers?: string[];
   rootMarkers?: string[];
   filetypes?: string[];
+  extensions?: string[];
+  extensionToLanguage?: Record<string, string>;
   scope?: string;
   source?: LspSource;
   env?: Record<string, unknown>;
@@ -103,12 +105,13 @@ async function reload(section: HTMLElement): Promise<void> {
   if (!items.length) {
     section.appendChild(emptyState({
       message: 'no LSP servers configured.',
-      hint: 'add one from the registry or edit ~/.grok/config.toml',
+      hint: 'add one from the registry or edit ~/.grok/lsp.json',
     }));
     section.appendChild(buildFooterHint(
       'Starter snippet: ' +
-      '<code>[[lsp]] language = "typescript" command = "typescript-language-server" ' +
-      'args = ["--stdio"] root_markers = ["package.json", "tsconfig.json"]</code>',
+      '<code>{ "typescript": { "command": "typescript-language-server", ' +
+      '"args": ["--stdio"], "extensionToLanguage": { ".ts": "typescript" } } }</code> ' +
+      'in <code>~/.grok/lsp.json</code>',
     ));
     return;
   }
@@ -126,7 +129,7 @@ async function reload(section: HTMLElement): Promise<void> {
   }
 
   section.appendChild(buildFooterHint(
-    'Edits land in <code>config.toml</code> under <code>[[lsp]]</code>. ' +
+    'Edits land in <code>~/.grok/lsp.json</code>. ' +
     'Use "browse registry" above to add a server with one click.',
   ));
 }
@@ -157,16 +160,19 @@ async function addFromRegistry(entry: LspRegistryEntry, section: HTMLElement): P
   setStatusLine(section, `adding ${entry.name}...`);
   try {
     await api.lsp.add({
+      name: entry.slug,
       language: entry.language,
       command: entry.command,
       args: entry.args,
       root_markers: entry.root_markers,
+      extensions: entry.extensions,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     setStatusLine(section, `failed to add ${entry.name}: ${msg}`);
     return;
   }
+  setStatusLine(section, `added ${entry.name}`);
   await reload(section);
 }
 
@@ -177,15 +183,16 @@ function makeLspCard(s: LspServer): HTMLElement {
   const markers = Array.isArray(s.root_markers || s.rootMarkers) ? (s.root_markers || s.rootMarkers)! : [];
   const tags: string[] = [];
   if (markers.length) tags.push(`roots: ${markers.join(', ')}`);
-  if (Array.isArray(s.filetypes) && s.filetypes.length) tags.push(`filetypes: ${s.filetypes.join(', ')}`);
+  if (Array.isArray(s.extensions) && s.extensions.length) tags.push(`extensions: ${s.extensions.join(', ')}`);
+  else if (Array.isArray(s.filetypes) && s.filetypes.length) tags.push(`filetypes: ${s.filetypes.join(', ')}`);
 
   const target = [cmd, ...args].filter(Boolean).join(' ');
 
   const actions = [{
-    label: 'copy TOML',
-    title: 'copy a [[lsp]] block you can paste into config.toml',
+    label: 'copy JSON',
+    title: 'copy an lsp.json entry you can paste into ~/.grok/lsp.json',
     onClick: async (ev: MouseEvent): Promise<void> => {
-      const ok = await copyToClipboard(toToml(s));
+      const ok = await copyToClipboard(toJson(s));
       const btn = ev.currentTarget as HTMLButtonElement;
       const prior = btn.textContent;
       btn.textContent = ok ? 'copied' : 'copy failed';
@@ -207,28 +214,23 @@ function makeLspCard(s: LspServer): HTMLElement {
   });
 }
 
-function toToml(s: LspServer): string {
-  const lines: string[] = ['[[lsp]]'];
-  const lang = s.language || s.name;
-  if (lang) lines.push(`language = ${q(lang)}`);
-  if (s.command) lines.push(`command = ${q(s.command)}`);
-  if (Array.isArray(s.args) && s.args.length) {
-    lines.push(`args = [${s.args.map(q).join(', ')}]`);
+function toJson(s: LspServer): string {
+  const name = s.name || s.language || 'server';
+  const entry: Record<string, unknown> = {};
+  if (s.command) entry['command'] = s.command;
+  if (Array.isArray(s.args) && s.args.length) entry['args'] = s.args;
+  if (s.extensionToLanguage && typeof s.extensionToLanguage === 'object') {
+    entry['extensionToLanguage'] = s.extensionToLanguage;
+  } else if (Array.isArray(s.extensions) && s.extensions.length) {
+    const lang = s.language || s.name || 'plaintext';
+    const map: Record<string, string> = {};
+    for (const e of s.extensions) map[e] = lang;
+    entry['extensionToLanguage'] = map;
   }
   const markers = s.root_markers || s.rootMarkers;
-  if (Array.isArray(markers) && markers.length) {
-    lines.push(`root_markers = [${markers.map(q).join(', ')}]`);
+  if (Array.isArray(markers) && markers.length) entry['rootMarkers'] = markers;
+  if (s.env && typeof s.env === 'object' && !Array.isArray(s.env) && Object.keys(s.env).length) {
+    entry['env'] = s.env;
   }
-  if (s.env && typeof s.env === 'object') {
-    const kvs = Object.entries(s.env).map(([k, v]) => `${k} = ${q(String(v))}`);
-    if (kvs.length) {
-      lines.push(`[lsp.env]`);
-      lines.push(...kvs);
-    }
-  }
-  return lines.join('\n') + '\n';
-}
-
-function q(s: string): string {
-  return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  return JSON.stringify({ [name]: entry }, null, 2) + '\n';
 }

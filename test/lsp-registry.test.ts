@@ -36,3 +36,18 @@ test('LSP registry official flags are booleans', () => {
     assert.equal(typeof e.official, 'boolean', `${e.name} official must be boolean`);
   }
 });
+
+test('every LSP registry entry maps at least one extension to a language ID', () => {
+  for (const e of LSP_REGISTRY) {
+    assert.ok(e.extensions && typeof e.extensions === 'object',
+      `${e.name} must have an extensions map`);
+    const keys = Object.keys(e.extensions);
+    assert.ok(keys.length > 0, `${e.name} needs at least one extension`);
+    for (const k of keys) {
+      assert.match(k, /^\.[A-Za-z0-9_.+-]+$/, `${e.name} extension key must start with a dot: ${k}`);
+      const v = e.extensions[k];
+      assert.ok(typeof v === 'string' && v.length > 0,
+        `${e.name} extension ${k} must map to a non-empty language ID`);
+    }
+  }
+});
