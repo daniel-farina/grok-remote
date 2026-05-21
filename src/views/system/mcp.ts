@@ -3,7 +3,33 @@
 
 import { api } from '../../lib/api.js';
 import { MCP_REGISTRY, MCP_CATEGORIES, type McpRegistryEntry } from './mcp-registry.js';
-import { openRegistryPicker, type RegistryPickEntry } from './registry-picker.js';
+import { openRegistryPicker, type RegistryPickEntry, type RegistryRefreshResult } from './registry-picker.js';
+
+// Shape returned by the backend live-registry endpoint. Matches the
+// NormalizedEntry shape in lib/mcp-registry-upstream.ts.
+interface LiveRegistryEntry {
+  name: string;
+  slug: string;
+  description: string;
+  category: string;
+  transport: 'stdio' | 'http' | 'sse';
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Array<{ name: string; required: boolean; placeholder?: string; help?: string }>;
+  url_docs?: string;
+  official: boolean;
+  source: 'upstream' | 'static';
+}
+
+interface LiveRegistryResponse {
+  ok: boolean;
+  fetchedAt?: string;
+  count?: number;
+  stale?: boolean;
+  entries?: LiveRegistryEntry[];
+  error?: string;
+}
 
 interface McpServer {
   name?: string;
@@ -557,28 +583,115 @@ function renderDoctorAll(): void {
   slot.appendChild(out);
 }
 
-function openMcpRegistryPicker(): void {
-  const entries: RegistryPickEntry[] = MCP_REGISTRY.map(e => ({
+interface PickerState {
+  bySlug: Map<string, McpRegistryEntry>;
+  source: 'live' | 'static';
+}
+
+function toPickEntry(e: McpRegistryEntry & { source?: string }): RegistryPickEntry {
+  const tags: string[] = [e.transport];
+  if (e.source === 'static') tags.push('fallback');
+  return {
     slug: e.slug,
     name: e.name,
     description: e.description,
     group: e.category,
-    tags: [e.transport],
+    tags,
     official: e.official,
     envHints: (e.env || []).map(v => `${v.required ? 'required' : 'optional'} env: ${v.name}${v.placeholder ? ` (${v.placeholder})` : ''}`),
     docsUrl: e.url_docs,
-  }));
-  openRegistryPicker({
+  };
+}
+
+function fromLive(le: LiveRegistryEntry): McpRegistryEntry {
+  const env = le.env ? le.env.map(v => ({
+    name: v.name,
+    required: Boolean(v.required),
+    ...(v.placeholder ? { placeholder: v.placeholder } : {}),
+    ...(v.help ? { help: v.help } : {}),
+  })) : undefined;
+  return {
+    name: le.name,
+    slug: le.slug,
+    description: le.description || '(no description)',
+    category: le.category || 'other',
+    transport: le.transport,
+    ...(le.command ? { command: le.command } : {}),
+    ...(le.args ? { args: le.args } : {}),
+    ...(le.url ? { url: le.url } : {}),
+    ...(env ? { env } : {}),
+    ...(le.url_docs ? { url_docs: le.url_docs } : {}),
+    official: Boolean(le.official),
+  };
+}
+
+function dedupeBySlug(entries: McpRegistryEntry[]): McpRegistryEntry[] {
+  const seen = new Map<string, McpRegistryEntry>();
+  for (const e of entries) {
+    if (!seen.has(e.slug)) seen.set(e.slug, e);
+  }
+  return Array.from(seen.values());
+}
+
+const STATIC_FALLBACK_ENTRIES: McpRegistryEntry[] = MCP_REGISTRY;
+
+async function loadLiveRegistry(): Promise<RegistryRefreshResult & { state: PickerState }> {
+  const resp = await api.mcp.getRegistry() as LiveRegistryResponse;
+  if (resp && Array.isArray(resp.entries) && resp.entries.length) {
+    const merged = dedupeBySlug(resp.entries.map(fromLive));
+    const state: PickerState = { bySlug: new Map(merged.map(e => [e.slug, e])), source: 'live' };
+    return { entries: merged.map(toPickEntry), fetchedAt: resp.fetchedAt, count: merged.length, state };
+  }
+  const state: PickerState = {
+    bySlug: new Map(STATIC_FALLBACK_ENTRIES.map(e => [e.slug, e])),
+    source: 'static',
+  };
+  return { entries: STATIC_FALLBACK_ENTRIES.map(e => toPickEntry({ ...e, source: 'static' })), state };
+}
+
+function openMcpRegistryPicker(): void {
+  // Open instantly with the static seeds; swap in the live list once the
+  // backend cache responds (or stays on the seeds if upstream is offline).
+  let pickerState: PickerState = {
+    bySlug: new Map(STATIC_FALLBACK_ENTRIES.map(e => [e.slug, e])),
+    source: 'static',
+  };
+
+  const handle = openRegistryPicker({
     title: 'MCP server registry',
     groupLabel: 'category',
-    entries,
+    totalLabel: 'servers',
+    entries: STATIC_FALLBACK_ENTRIES.map(e => toPickEntry({ ...e, source: 'static' })),
     groupOrder: MCP_CATEGORIES,
     closeAfterAdd: true,
     onAdd: (slug) => {
-      const entry = MCP_REGISTRY.find(e => e.slug === slug);
+      const entry = pickerState.bySlug.get(slug);
       if (entry) prefillMcpForm(entry);
     },
+    onRefresh: async () => {
+      const resp = await api.mcp.refreshRegistry() as LiveRegistryResponse;
+      if (!resp || !Array.isArray(resp.entries)) {
+        throw new Error(resp && resp.error ? resp.error : 'empty registry response');
+      }
+      const merged = dedupeBySlug(resp.entries.map(fromLive));
+      pickerState = { bySlug: new Map(merged.map(e => [e.slug, e])), source: 'live' };
+      return {
+        entries: merged.map(toPickEntry),
+        fetchedAt: resp.fetchedAt,
+        count: merged.length,
+      };
+    },
   });
+
+  void (async () => {
+    try {
+      const live = await loadLiveRegistry();
+      pickerState = live.state;
+      handle.update(live.entries, live.fetchedAt);
+    } catch {
+      // keep the seed picker visible. user can still hit refresh.
+    }
+  })();
 }
 
 function prefillMcpForm(entry: McpRegistryEntry): void {

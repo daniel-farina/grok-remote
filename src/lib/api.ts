@@ -134,6 +134,8 @@ export const api = {
     doctor:   (name?: string): Promise<unknown>  => request('GET',    name
                                               ? `/api/system/mcp/${encodeURIComponent(name)}/doctor`
                                               : '/api/system/mcp/doctor'),
+    getRegistry:     (): Promise<unknown> => request('GET',  '/api/system/mcp/registry'),
+    refreshRegistry: (): Promise<unknown> => request('POST', '/api/system/mcp/registry/refresh'),
   },
 
   lsp: {

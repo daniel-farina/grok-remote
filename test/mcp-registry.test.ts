@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { MCP_REGISTRY, MCP_CATEGORIES } from '../src/views/system/mcp-registry.js';
+import { formatRelative } from '../src/views/system/registry-picker.js';
 
 test('MCP registry has no duplicate slugs', () => {
   const slugs = MCP_REGISTRY.map(e => e.slug);
@@ -50,4 +51,18 @@ test('MCP env hints have non-empty names when present', () => {
       assert.equal(typeof v.required, 'boolean', `env.required must be boolean on ${e.name}`);
     }
   }
+});
+
+test('formatRelative produces compact human strings', () => {
+  const now = Date.parse('2026-05-21T12:00:00Z');
+  assert.equal(formatRelative('2026-05-21T11:59:58Z', now), 'just now');
+  assert.equal(formatRelative('2026-05-21T11:59:00Z', now), '1 minute ago');
+  assert.equal(formatRelative('2026-05-21T11:00:00Z', now), '1 hour ago');
+  assert.equal(formatRelative('2026-05-20T12:00:00Z', now), 'yesterday');
+  assert.equal(formatRelative('2026-05-10T12:00:00Z', now), '11 days ago');
+});
+
+test('formatRelative handles invalid timestamps by returning the input', () => {
+  const fallback = formatRelative('not-a-date');
+  assert.equal(fallback, 'not-a-date');
 });
