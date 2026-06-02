@@ -15,6 +15,7 @@ function clampInt(raw: unknown, min: number, max: number, fallback: number): num
 interface SettingsSnapshot {
   defaultModel?: string | null;
   defaultCwd?: string | null;
+  defaultProjectsBase?: string | null;
   autoApprove?: boolean;
   debug?: boolean;
   retentionDays?: number;
@@ -42,6 +43,7 @@ export class SettingsView {
   modelInput!: HTMLInputElement;
   modelSelect: HTMLSelectElement | null = null;
   cwdInput!: HTMLInputElement;
+  projectsBaseInput!: HTMLInputElement;
   autoApprove!: HTMLInputElement;
   debugToggle!: HTMLInputElement;
   retentionInput!: HTMLInputElement;
@@ -154,6 +156,7 @@ export class SettingsView {
     this.modelInput   = el('input', { class: 'inp', type: 'text', placeholder: 'grok-build' }) as HTMLInputElement;
     this.modelSelect  = null;
     this.cwdInput     = el('input', { class: 'inp', type: 'text', placeholder: '/path/to/working/dir' }) as HTMLInputElement;
+    this.projectsBaseInput = el('input', { class: 'inp', type: 'text', placeholder: '/Users/you/Documents/coding' }) as HTMLInputElement;
     this.autoApprove  = el('input', { type: 'checkbox' }) as HTMLInputElement;
     this.debugToggle  = el('input', { type: 'checkbox' }) as HTMLInputElement;
     this.retentionInput = el('input', {
@@ -183,6 +186,8 @@ export class SettingsView {
         'used when you spawn a new agent without specifying one.'),
       this.field('default cwd', this.cwdInput,
         'fallback working directory for new agents.'),
+      this.field('default projects base', this.projectsBaseInput,
+        'base directory for "+ New Project" (e.g. ~/Documents/coding). New projects are created as subfolders here.'),
       this.field('auto-approve tools',
         el('label', { class: 'toggle' }, this.autoApprove,
           el('span', { class: 'toggle-text' }, 'on')),
@@ -228,6 +233,11 @@ export class SettingsView {
         this.settings = (settings.value || {}) as SettingsSnapshot;
         this.modelInput.value  = this.settings.defaultModel || '';
         this.cwdInput.value    = this.settings.defaultCwd   || '';
+        this.projectsBaseInput.value = this.settings.defaultProjectsBase || '';
+        if (!this.projectsBaseInput.value) {
+          this.projectsBaseInput.value = '';
+          this.projectsBaseInput.placeholder = '~/Documents/coding';
+        }
         this.autoApprove.checked = !!this.settings.autoApprove;
         this.debugToggle.checked = !!this.settings.debug;
         const rd = (this.settings.retentionDays != null) ? Number(this.settings.retentionDays) : 30;
@@ -287,6 +297,7 @@ export class SettingsView {
         ? this.modelSelect.value
         : (this.modelInput.value.trim() || null),
       defaultCwd:   this.cwdInput.value.trim() || null,
+      defaultProjectsBase: this.projectsBaseInput.value.trim() || null,
       autoApprove:  !!this.autoApprove.checked,
       debug:        !!this.debugToggle.checked,
       retentionDays: clampInt(this.retentionInput.value, 0, 3650, 30),
@@ -301,6 +312,11 @@ export class SettingsView {
       window.dispatchEvent(new CustomEvent('grok-remote:settings-change', {
         detail: this.settings,
       }));
+
+      // Keep the client-side New Project helper in sync
+      if (this.settings.defaultProjectsBase) {
+        localStorage.setItem('grok-remote.defaultProjectsBase', this.settings.defaultProjectsBase);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.setStatus(`save failed: ${msg}`, 'fail');

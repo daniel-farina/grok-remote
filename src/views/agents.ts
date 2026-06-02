@@ -171,7 +171,9 @@ export class AgentsSidebar {
       );
     });
 
-    this.empty = el('div', { class: 'agents-empty' }, 'no agents yet') as HTMLElement;
+    this.empty = el('div', { class: 'agents-empty' },
+    'no agents yet — click "+ New Project" to start a real folder + agent'
+  ) as HTMLElement;
     this.noMatch = el('div', { class: 'agents-empty' }, 'no conversations match your search') as HTMLElement;
     this.error = el('div', { class: 'agents-empty agents-empty--err' }) as HTMLElement;
     this.error.hidden = true;
@@ -182,8 +184,21 @@ export class AgentsSidebar {
       onclick: () => void this.spawnNew(),
     }, '+ new') as HTMLButtonElement;
 
+    // New button: spawn agent bound to a real folder on disk
+    const newInFolderBtn = el('button', {
+      class: 'agents-new-btn',
+      title: 'Create a new agent that works directly in a real folder on your machine (recommended)',
+      onclick: () => void this.spawnNewInWorkspace(),
+    }, '+ in folder') as HTMLButtonElement;
+
+    const newProjectBtn = el('button', {
+      class: 'agents-new-btn',
+      title: 'Create a new real project folder under your coding directory and spawn an agent in it',
+      onclick: () => void this.spawnNewProject(),
+    }, '+ new project') as HTMLButtonElement;
+
     this.newFolderBtn = el('button', {
-      class: 'agents-new-folder-btn',
+      class: 'agents-new-btn agents-new-folder-btn',
       type: 'button',
       title: 'create a new folder',
       onclick: () => void this.promptNewFolder(),
@@ -254,8 +269,12 @@ export class AgentsSidebar {
     this.root = el('aside', { class: 'sidebar' },
       el('div', { class: 'sidebar-head' },
         el('span', { class: 'sidebar-title' }, 'agents'),
-        this.newBtn,
-        this.newFolderBtn,
+        el('div', { class: 'sidebar-actions' },
+          newProjectBtn,   /* recommended for real work */
+          newInFolderBtn,
+          this.newBtn,
+          this.newFolderBtn,
+        ),
         this.closeDrawerBtn,
       ),
       el('div', { class: 'sidebar-tools' },
@@ -346,7 +365,7 @@ export class AgentsSidebar {
         || (a.model || '').toLowerCase().includes(needle);
   }
 
-  async spawnNew(): Promise<void> {
+  async spawnNew(options: { cwd?: string; name?: string } = {}): Promise<void> {
     if (this._creating) return;
     this._creating = true;
     this.newBtn.disabled = true;
@@ -354,7 +373,11 @@ export class AgentsSidebar {
     const prevLabel = this.newBtn.textContent;
     this.newBtn.textContent = 'spawning...';
     try {
-      const created = await api.createAgent({}) as Agent;
+      const body: Record<string, unknown> = {};
+      if (options.cwd) body.cwd = options.cwd;
+      if (options.name) body.name = options.name;
+
+      const created = await api.createAgent(body) as Agent;
       if (typeof this.onCreate === 'function') this.onCreate(created);
       await this.refresh();
       if (created && created.id) this.select(created.id);
@@ -366,6 +389,79 @@ export class AgentsSidebar {
       this._creating = false;
       this.newBtn.disabled = false;
       this.newBtn.textContent = prevLabel;
+    }
+  }
+
+  /**
+   * Prompt the user for a real directory on disk and spawn an agent
+   * bound to that directory (instead of the isolated sandbox).
+   * This makes the Files tab and tools operate against real code.
+   */
+    async spawnNewInWorkspace(): Promise<void> {
+    const lastPath = localStorage.getItem('grok-remote.lastWorkspacePath') || '';
+    const defaultSuggestion = lastPath || '/Users/richgates/Documents/coding/promptsilo';
+
+    const path = window.prompt(
+      'Enter full path to an *existing* real folder for this agent:\n\n' +
+      'Example: /Users/you/Documents/coding/promptsilo\n\n' +
+      'Useful when you already have code somewhere and want the agent (and Files) to use it directly.' ,
+      defaultSuggestion
+    );
+
+    if (!path || !path.trim()) return;
+
+    const trimmed = path.trim();
+    localStorage.setItem('grok-remote.lastWorkspacePath', trimmed);
+
+    await this.spawnNew({ cwd: trimmed });
+  }
+
+  
+  /**
+   * "New Project" flow:
+   * - Prompts for a project name
+   * - Creates the folder under the user's coding directory (default ~/Documents/coding)
+   * - Spawns a new agent bound directly to that real folder
+   */
+  async spawnNewProject(): Promise<void> {
+    let base = localStorage.getItem('grok-remote.defaultProjectsBase') || '';
+
+    try {
+      const s = await api.getSettings() as any;
+      if (s && typeof s.defaultProjectsBase === 'string' && s.defaultProjectsBase) {
+        base = s.defaultProjectsBase;
+      }
+    } catch {}
+
+    if (!base) base = '~/Documents/coding';
+
+    const projectName = window.prompt(
+      'New project name:\n\n' +
+      'A folder will be created at:\n' + base + '/<name>\n\n' +
+      'A matching sidebar folder will be created and the agent placed inside it.'
+    );
+    if (!projectName || !projectName.trim()) return;
+
+    const safeName = projectName.trim().replace(/[^a-zA-Z0-9-_ .]/g, '').trim();
+    if (!safeName) {
+      alert('Invalid project name');
+      return;
+    }
+
+    const fullPath = base.replace(/\/$/, '') + '/' + safeName;
+
+    const created = await this.spawnNew({ name: safeName, cwd: fullPath }) as any;
+
+    // Best effort: create a UI folder with same name and put the agent in it
+    try {
+      const folder = await api.folders.create(safeName) as any;
+      if (folder && folder.id && created && created.id) {
+        await api.agents.setFolder(created.id, folder.id);
+        await this.refreshFolders();
+      }
+    } catch (e) {
+      // non-fatal, user can drag later
+      console.warn('auto folder grouping failed', e);
     }
   }
 

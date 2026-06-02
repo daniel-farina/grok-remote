@@ -341,6 +341,13 @@ body::before {
   justify-content: space-between;
   gap: 8px;
 }
+
+.sidebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
 .sidebar-title {
   font-size: 11px;
   letter-spacing: 0.16em;
@@ -356,6 +363,12 @@ body::before {
   font-family: var(--mono);
   font-size: 11px;
   cursor: pointer;
+  line-height: 1;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px; /* ensure consistent height */
 }
 
 /* Search + sort row */
@@ -471,6 +484,7 @@ body::before {
 }
 .agents-new-btn:hover {
   background: rgba(94, 234, 212, 0.06);
+  border-color: var(--teal);
 }
 .agents-form {
   display: flex;
@@ -8807,7 +8821,15 @@ body::before {
   font-size: 11px;
   cursor: pointer;
 }
-.agents-new-folder-btn:hover { color: var(--text); border-color: var(--teal); }
+.agents-new-folder-btn {
+  /* slightly more muted to indicate it's for UI grouping rather than agent spawn */
+  color: var(--muted);
+  border-style: dashed;
+}
+.agents-new-folder-btn:hover {
+  color: var(--text);
+  border-color: var(--teal);
+}
 
 .folder-group {
   display: flex;
@@ -9411,3 +9433,15 @@ body::before {
   padding: 1px 6px;
 }
 
+
+
+/* Make "+ New Project" stand out a little as the primary way to start real work */
+.sidebar-actions button[title*="New Project"] {
+  background: rgba(94, 234, 212, 0.12);
+  border-style: solid;
+  border-color: var(--teal);
+  font-weight: 500;
+}
+.sidebar-actions button[title*="New Project"]:hover {
+  background: rgba(94, 234, 212, 0.20);
+}

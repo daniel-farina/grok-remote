@@ -109,7 +109,20 @@ Vision-capable models describe the image; non-vision models still have it on dis
 
 ### Files tab
 
-Each conversation has a **Files** tab that browses its working directory. Click into folders, preview text files (line-numbered), HTML files (sandboxed Source / Preview toggle + open-in-new-tab), images (with checkered background), video / audio (HTML5 controls). The backend serves binary files via a `Range`-aware `/files/raw` endpoint so seeking works.
+Each conversation has a **Files** tab that browses its working directory. Click into folders, preview text files (line-numbered), HTML files (sandboxed Source / Preview toggle + open-in-new-tab), images (with checkered background), video / audio (HTML5 controls). The backend serves binary files via a Range-aware /files/raw endpoint so seeking works.
+
+### Real working directories (non-sandbox mode)
+
+By default every agent gets an isolated sandbox under `~/.grok-remote/agents/<id>/cwd`.
+
+For real development you can bind agents to folders on your actual machine:
+
+- **+ in folder** — attach a new (or existing) agent to any directory you already have on disk.
+- **+ New Project** — type a short name. A folder is automatically created under your configured "Default projects base" (see Settings) and a fresh agent is spawned directly inside the real directory. A matching sidebar folder is also created so everything is grouped.
+
+The Files tab and all tools then work against your real source tree. You stay protected from leaving the chosen directory.
+
+You can also change the cwd of an existing agent later (Info tab or PATCH /api/agents/:id).
 
 ### Slash commands
 
