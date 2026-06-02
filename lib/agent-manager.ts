@@ -64,6 +64,15 @@ interface AgentRecord extends AgentMeta {
   _lastTokenEmit?: number;
 }
 
+
+function expandTilde(p: string): string {
+  if (!p) return p;
+  if (p.startsWith('~/') || p === '~') {
+    return path.join(os.homedir(), p.slice(1));
+  }
+  return p;
+}
+
 export interface AgentSpawnOptions {
   name?: string;
   model?: string;
@@ -76,6 +85,7 @@ export interface AgentPatch {
   starred?: boolean;
   archived?: boolean;
   settings?: AcpClientSettings | null;
+  cwd?: string;
 }
 
 export interface PublicAgent {
@@ -393,6 +403,18 @@ export class AgentManager extends EventEmitter {
       a.settings = Object.keys(next).length ? next : null;
       changed = true;
     }
+
+    // Support updating the working directory of an existing agent
+    if (typeof patch.cwd === 'string' && patch.cwd.trim()) {
+      const newCwd = path.resolve(patch.cwd.trim());
+      if (fs.existsSync(newCwd)) {
+        a.cwd = newCwd;
+        changed = true;
+      } else {
+        throw new Error('cwd path does not exist: ' + newCwd);
+      }
+    }
+
     if (changed) {
       writeMeta(a);
       const emitEvent = this._emitEventFactory(a);
@@ -572,7 +594,16 @@ export class AgentManager extends EventEmitter {
     const id = randomUUID();
     ensureAgentDirs(id);
     const dir = agentDir(id);
-    const workCwd = cwd && fs.existsSync(cwd) ? path.resolve(cwd) : path.join(dir, 'cwd');
+
+    let workCwd: string;
+    if (cwd) {
+      // Explicit cwd was provided → always use it (create if necessary).
+      // This enables "New Project" workflows where the folder may not exist yet.
+      workCwd = path.resolve(expandTilde(cwd));
+    } else {
+      // No explicit cwd → fall back to isolated sandbox for this agent.
+      workCwd = path.join(dir, 'cwd');
+    }
     fs.mkdirSync(workCwd, { recursive: true });
 
     const ring = createRing<AgentRingEntry>(SSE_RING_LIMIT);

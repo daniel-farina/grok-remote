@@ -10,6 +10,7 @@ const FILE = path.join(ROOT, 'settings.json');
 export interface Settings {
   defaultModel: string | null;
   defaultCwd:   string | null;
+  defaultProjectsBase: string | null;
   autoApprove:  boolean;
   retentionDays: number;
   theme:        string;
@@ -20,6 +21,7 @@ export interface Settings {
 const DEFAULTS: Settings = {
   defaultModel: null,
   defaultCwd: null,
+  defaultProjectsBase: null,
   autoApprove: true,
   retentionDays: 30,
   theme: 'dark',
