@@ -63,10 +63,10 @@ test('openStream constructs an EventSource with the given URL', () => {
 test('openStream registers onOpen, onError, message, and each known event', () => {
   fresh();
   const h = openStream('/x', { onOpen: () => {}, onError: () => {} });
-  // open + error + message + every entry in KNOWN_EVENTS (11) = 14 listeners.
+  // open + error + message + every entry in KNOWN_EVENTS.
   const names = Array.from(lastInstance!.listeners.keys()).sort();
   // Spot-check a representative subset (the implementation iterates KNOWN_EVENTS).
-  for (const n of ['open', 'error', 'message', 'tool_call', 'tool_call_update', 'tool_call_delta_chunk', 'agent_status', 'prompt_complete']) {
+  for (const n of ['open', 'error', 'message', 'user_message', 'tool_call', 'tool_call_update', 'tool_call_delta_chunk', 'agent_status', 'prompt_complete']) {
     assert.ok(names.includes(n), `expected listener for ${n}; got ${names.join(',')}`);
   }
   h.close();
@@ -149,4 +149,18 @@ test('readyState reports 2 (CLOSED) when the underlying EventSource is gone', ()
   const h = openStream('/x');
   h.close();
   assert.equal(h.readyState(), 2);
+});
+
+
+test('openStream fires onAny for user_message (cross-client prompt echo)', () => {
+  fresh();
+  const seen: Array<{ name: string; parsed: unknown }> = [];
+  const h = openStream('/x', {
+    onAny: (name, parsed) => { seen.push({ name, parsed }); },
+  });
+  lastInstance!.fire('user_message', '{"text":"hello from desktop","_t":1}');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.name, 'user_message');
+  assert.deepEqual(seen[0]!.parsed, { text: 'hello from desktop', _t: 1 });
+  h.close();
 });

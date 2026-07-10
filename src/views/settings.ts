@@ -4,6 +4,7 @@ import { api } from '../lib/api.js';
 import { el } from '../lib/render.js';
 import { iconHtml } from '../lib/icons.js';
 import { THEMES, getTheme, setTheme } from '../lib/themes.js';
+import { getToolsInChat, setToolsInChat, TOOLS_IN_CHAT_CHANGE } from '../lib/ui-prefs.js';
 import { SETTINGS_SECTIONS, getSettingsPage } from './system/index';
 
 function clampInt(raw: unknown, min: number, max: number, fallback: number): number {
@@ -44,6 +45,7 @@ export class SettingsView {
   cwdInput!: HTMLInputElement;
   autoApprove!: HTMLInputElement;
   debugToggle!: HTMLInputElement;
+  toolsInChatToggle!: HTMLInputElement;
   retentionInput!: HTMLInputElement;
   themePicker!: HTMLElement;
   statusEl!: HTMLElement;
@@ -156,6 +158,18 @@ export class SettingsView {
     this.cwdInput     = el('input', { class: 'inp', type: 'text', placeholder: '/path/to/working/dir' }) as HTMLInputElement;
     this.autoApprove  = el('input', { type: 'checkbox' }) as HTMLInputElement;
     this.debugToggle  = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.toolsInChatToggle = el('input', {
+      type: 'checkbox',
+      // Client-only preference: apply instantly, no server save.
+      onchange: () => {
+        setToolsInChat(!!this.toolsInChatToggle.checked);
+      },
+    }) as HTMLInputElement;
+    this.toolsInChatToggle.checked = getToolsInChat();
+    // Stay in sync if another tab / future control flips the pref.
+    window.addEventListener(TOOLS_IN_CHAT_CHANGE, () => {
+      if (this.toolsInChatToggle) this.toolsInChatToggle.checked = getToolsInChat();
+    });
     this.retentionInput = el('input', {
       class: 'inp inp--num', type: 'number', min: '0', max: '3650', step: '1', placeholder: '30',
     }) as HTMLInputElement;
@@ -191,6 +205,10 @@ export class SettingsView {
         el('label', { class: 'toggle' }, this.debugToggle,
           el('span', { class: 'toggle-text' }, 'show developer affordances')),
         'shows the { payload } button in the composer to inspect the exact JSON sent to the agent.'),
+      this.field('tool calls in conversation',
+        el('label', { class: 'toggle' }, this.toolsInChatToggle,
+          el('span', { class: 'toggle-text' }, 'show inline in the chat stream')),
+        'applies instantly (this browser only). when on, tool cards appear under each turn in the chat. when off, they only appear in the tools side panel (desktop). on phones the side panel is hidden, so off hides tool cards from the stream. default: on for narrow screens, off for wide — until you set a preference.'),
       this.field('history retention (days)', this.retentionInput,
         'agent history under ~/.grok-remote/agents/ is pruned when last activity exceeds this. starred agents are never pruned. 0 disables cleanup. default 30.'),
       this.field('theme', this.themePicker,
@@ -230,6 +248,7 @@ export class SettingsView {
         this.cwdInput.value    = this.settings.defaultCwd   || '';
         this.autoApprove.checked = !!this.settings.autoApprove;
         this.debugToggle.checked = !!this.settings.debug;
+        this.toolsInChatToggle.checked = getToolsInChat();
         const rd = (this.settings.retentionDays != null) ? Number(this.settings.retentionDays) : 30;
         this.retentionInput.value = Number.isFinite(rd) ? String(Math.max(0, Math.min(3650, rd))) : '30';
       } else {
