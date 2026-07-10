@@ -4,6 +4,10 @@ import { api } from '../lib/api.js';
 import { el } from '../lib/render.js';
 import { iconHtml } from '../lib/icons.js';
 import { THEMES, getTheme, setTheme } from '../lib/themes.js';
+import {
+  APP_ICONS, APP_ICON_CHANGE, applyAppIcon, getAppIconId,
+  iconSvgDataUrl, setAppIconId,
+} from '../lib/app-icons.js';
 import { SETTINGS_SECTIONS, getSettingsPage } from './system/index';
 
 function clampInt(raw: unknown, min: number, max: number, fallback: number): number {
@@ -46,6 +50,8 @@ export class SettingsView {
   debugToggle!: HTMLInputElement;
   retentionInput!: HTMLInputElement;
   themePicker!: HTMLElement;
+  appIconPicker!: HTMLElement;
+  appIconCards: Record<string, HTMLElement> = {};
   statusEl!: HTMLElement;
   saveBtn!: HTMLButtonElement;
   reloadBtn!: HTMLButtonElement;
@@ -160,6 +166,7 @@ export class SettingsView {
       class: 'inp inp--num', type: 'number', min: '0', max: '3650', step: '1', placeholder: '30',
     }) as HTMLInputElement;
     this.themePicker = this._buildThemePicker();
+    this.appIconPicker = this._buildAppIconPicker();
     this.statusEl = el('div', { class: 'settings-status' }) as HTMLElement;
 
     this.saveBtn = el('button', {
@@ -195,6 +202,8 @@ export class SettingsView {
         'agent history under ~/.grok-remote/agents/ is pruned when last activity exceeds this. starred agents are never pruned. 0 disables cleanup. default 30.'),
       this.field('theme', this.themePicker,
         'applies instantly. saved in this browser only.'),
+      this.field('homescreen icon', this.appIconPicker,
+        'color of the GR monogram used for the tab favicon and Add to Home Screen. each install (origin) has its own choice so multiple hosts stay distinct. applies instantly. on iOS, remove and re-add the home-screen icon after changing. default: stable color derived from this host.'),
 
       el('div', { class: 'settings-actions' }, this.saveBtn, this.reloadBtn),
     ) as HTMLElement;
@@ -230,6 +239,7 @@ export class SettingsView {
         this.cwdInput.value    = this.settings.defaultCwd   || '';
         this.autoApprove.checked = !!this.settings.autoApprove;
         this.debugToggle.checked = !!this.settings.debug;
+        this.refreshAppIconPicker();
         const rd = (this.settings.retentionDays != null) ? Number(this.settings.retentionDays) : 30;
         this.retentionInput.value = Number.isFinite(rd) ? String(Math.max(0, Math.min(3650, rd))) : '30';
       } else {
@@ -345,5 +355,54 @@ export class SettingsView {
       grid.appendChild(card);
     }
     return grid;
+  }
+
+  private _buildAppIconPicker(): HTMLElement {
+    const current = getAppIconId();
+    const grid = el('div', { class: 'app-icon-grid' }) as HTMLElement;
+    this.appIconCards = {};
+    for (const v of APP_ICONS) {
+      const isSel = v.id === current;
+      const preview = el('span', { class: 'app-icon-card__preview' },
+        el('img', {
+          class: 'app-icon-card__img',
+          src: iconSvgDataUrl(64, v),
+          alt: '',
+          width: '40',
+          height: '40',
+        }),
+      );
+      const card = el('label', {
+        class: `app-icon-card${isSel ? ' app-icon-card--selected' : ''}`,
+        title: v.label,
+      },
+        el('input', {
+          type: 'radio',
+          name: 'app-icon',
+          value: v.id,
+          checked: isSel,
+          onchange: () => {
+            const id = setAppIconId(v.id);
+            void applyAppIcon(id);
+            this.refreshAppIconPicker();
+          },
+        }),
+        preview,
+        el('span', { class: 'app-icon-card__label' }, v.label),
+      ) as HTMLElement;
+      this.appIconCards[v.id] = card;
+      grid.appendChild(card);
+    }
+    window.addEventListener(APP_ICON_CHANGE, () => this.refreshAppIconPicker());
+    return grid;
+  }
+
+  refreshAppIconPicker(): void {
+    const current = getAppIconId();
+    for (const [k, card] of Object.entries(this.appIconCards || {})) {
+      card.classList.toggle('app-icon-card--selected', k === current);
+      const radio = card.querySelector('input[type="radio"]') as HTMLInputElement | null;
+      if (radio) radio.checked = (k === current);
+    }
   }
 }
