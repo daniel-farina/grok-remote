@@ -37,6 +37,7 @@ import { copyToClipboard, serializeConversation, serializeResumeCommand } from '
 import { iconHtml } from '../lib/icons';
 import { fmtTokens } from '../lib/format';
 import { playIntro } from '../lib/intro-animation';
+import { getToolsInChat, TOOLS_IN_CHAT_CHANGE } from '../lib/ui-prefs';
 
 export class ChatView {
   static _toolsToggleWired: any;
@@ -80,6 +81,7 @@ export class ChatView {
   _onAgentsRefresh!: any;
   _onSettingsChange!: any;
   _onVisibility!: any;
+  _onToolsInChatChange!: ((ev?: Event) => void) | null;
   _payloadModal!: any;
   _pendingTodoSeed!: any;
   _promptCapImage!: any;
@@ -329,6 +331,16 @@ export class ChatView {
     document.dispatchEvent(new CustomEvent('grok-remote:tools-state', {
       detail: { collapsed: !!this._chatSplitCollapsed },
     }));
+    // Re-place tool cards when the tools-in-chat preference flips.
+    if (!this._onToolsInChatChange) {
+      this._onToolsInChatChange = () => {
+        try { this._applyToolsInChatPlacement(); } catch { /* ignore */ }
+      };
+      window.addEventListener(TOOLS_IN_CHAT_CHANGE, this._onToolsInChatChange);
+    }
+    // Apply current placement in case history was rendered under a
+    // different preference, or the viewport crossed the mobile breakpoint.
+    try { this._applyToolsInChatPlacement(); } catch { /* ignore */ }
   }
 
   destroy() {
@@ -353,6 +365,10 @@ export class ChatView {
     this._stopBgTerminalsPolling();
     if (this.imageAttach) { try { this.imageAttach.destroy(); } catch { /* ignore */ } this.imageAttach = null; }
     document.removeEventListener('visibilitychange', this._onVisibility);
+    if (this._onToolsInChatChange) {
+      window.removeEventListener(TOOLS_IN_CHAT_CHANGE, this._onToolsInChatChange);
+      this._onToolsInChatChange = null;
+    }
     if (this._onAgentsRefresh) {
       document.removeEventListener('grok-remote:agents-refresh', this._onAgentsRefresh);
       this._onAgentsRefresh = null;
@@ -1349,19 +1365,25 @@ export class ChatView {
     this._cancelChatIntro();
     const ts = (opts && opts.ts) || Date.now();
     const attachments = Array.isArray(opts && opts.attachments) ? opts.attachments : [];
-    const userBubble = renderUserBubble(userText, ts, {
-      attachments,
-      agentId: this.agentId,
-    });
+    const text = (typeof userText === 'string') ? userText : (userText == null ? '' : String(userText));
+    // ensureTurn() used to call startTurn('') when the first assistant/tool
+    // chunk arrived before a user_message (or when user_message was dropped
+    // by the SSE client). That rendered a blank "you" bubble — the "ghost
+    // messages" bug. Only mount a user bubble when there is actual content.
+    const hasUserContent = !!(text && text.length) || attachments.length > 0;
+    const userBubble = hasUserContent
+      ? renderUserBubble(text, ts, { attachments, agentId: this.agentId })
+      : null;
     // Only animate fresh insertions, never historical replay (that would
     // produce a chaotic shimmer across all replayed turns).
     const animate = !this._isReplaying && !(opts && opts.fromHistory);
     const classes = animate ? 'turn turn--enter' : 'turn';
-    const root = el('div', { class: classes }, userBubble);
+    const root = el('div', { class: classes });
+    if (userBubble) root.appendChild(userBubble);
     this.streamEl.appendChild(root);
     const turn = {
       user:      userBubble,
-      userText:  userText || '',
+      userText:  text,
       userAttachments: attachments,
       thinking:  null,
       tools:     [],
@@ -1375,6 +1397,35 @@ export class ChatView {
     this._decorateSkill(turn);
     this.scrollToBottom();
     return turn;
+  }
+
+  /**
+   * If ensureTurn() already opened an empty shell for early assistant/tool
+   * chunks, fill that shell's user bubble instead of starting a second turn
+   * when user_message finally arrives (or is recovered).
+   */
+  _fillEmptyUserTurn(text: any, attachments: any, opts?: any) {
+    const turn = this.activeTurn;
+    if (!turn) return false;
+    const hasExisting = !!(turn.userText && turn.userText.length)
+      || (Array.isArray(turn.userAttachments) && turn.userAttachments.length > 0);
+    if (hasExisting) return false;
+    const t = (typeof text === 'string') ? text : (text == null ? '' : String(text));
+    const atts = Array.isArray(attachments) ? attachments : [];
+    if (!t && !atts.length) return false;
+    const ts = (opts && opts.ts) || this._lastEventTs || Date.now();
+    const userBubble = renderUserBubble(t, ts, {
+      attachments: atts,
+      agentId: this.agentId,
+    });
+    turn.user = userBubble;
+    turn.userText = t;
+    turn.userAttachments = atts;
+    // User bubble belongs at the top of the turn, before thinking/tools/assistant.
+    turn.root.insertBefore(userBubble, turn.root.firstChild);
+    this._decorateSkill(turn);
+    this.scrollToBottom();
+    return true;
   }
 
   endTurn(meta: any) {
@@ -1741,11 +1792,14 @@ export class ChatView {
 
   _initChatSplit() {
     if (this._chatSplit) return;
-    // Mobile: don't init Split.js. CSS stacks the tools column below the
-    // chat stream (see .chat-split @media block). Hide the in-header toggle
-    // since it has no meaning when the layout is stacked.
+    // Mobile: don't init Split.js. The tools column is hidden (see
+    // .chat-split @media block) and tool cards render inline in the
+    // conversation stream via _ensureToolsGroup. Mark collapsed so the
+    // topbar tools toggle (if shown) reflects reality.
     if (this._isChatMobile()) {
       if (this._splitToggleBtn) this._splitToggleBtn.hidden = true;
+      this._chatSplitCollapsed = true;
+      this._applyChatSplitCollapsedClass();
       return;
     }
     if (this._splitToggleBtn) this._splitToggleBtn.hidden = false;
@@ -1829,16 +1883,55 @@ export class ChatView {
     this._updateToolsToggleLabel();
   }
 
+  /** Whether tool cards should live inline in the conversation stream. */
+  _wantsToolsInline() {
+    return getToolsInChat(this._isChatMobile());
+  }
+
   _ensureToolsGroup(turn: any) {
     if (turn._toolsGroup) return turn._toolsGroup;
+    const inline = this._wantsToolsInline();
+    // Side-panel groups get a short user-text snippet so you can map tools
+    // back to the turn. Inline groups sit under the user bubble already.
     const snippet = (turn.userText || '').trim();
-    const short = snippet.length > 80 ? snippet.slice(0, 78) + '...' : snippet;
+    const short = (!inline && snippet)
+      ? (snippet.length > 80 ? snippet.slice(0, 78) + '...' : snippet)
+      : '';
     const group = el('div', { class: 'tools-group' },
       short ? el('div', { class: 'tools-group__head', title: snippet }, short) : null,
     );
     turn._toolsGroup = group;
-    this.toolsStreamEl.appendChild(group);
+    this._placeToolsGroup(turn, group, inline);
     return group;
+  }
+
+  _placeToolsGroup(turn: any, group: any, inline: boolean) {
+    if (inline && turn.root) {
+      const before = (turn.assistant && turn.assistant.node
+        && turn.assistant.node.parentNode === turn.root)
+        ? turn.assistant.node
+        : null;
+      if (before) turn.root.insertBefore(group, before);
+      else turn.root.appendChild(group);
+      return;
+    }
+    if (this.toolsStreamEl) this.toolsStreamEl.appendChild(group);
+  }
+
+  /** Re-home every existing tools group after the tools-in-chat pref changes. */
+  _applyToolsInChatPlacement() {
+    const inline = this._wantsToolsInline();
+    if (!inline && this.toolsStreamEl) {
+      // Preserve turn order in the side panel.
+      for (const turn of this.turns || []) {
+        if (turn && turn._toolsGroup) this.toolsStreamEl.appendChild(turn._toolsGroup);
+      }
+      return;
+    }
+    for (const turn of this.turns || []) {
+      if (!turn || !turn._toolsGroup) continue;
+      this._placeToolsGroup(turn, turn._toolsGroup, true);
+    }
   }
 
   _initAutoScroll() {
@@ -2286,9 +2379,23 @@ export class ChatView {
   }
 
   onUserMessage(data: any, opts?: any) {
-    const text = (data && typeof data.text === 'string') ? data.text : extractText(data);
+    // Prefer the explicit text field the server puts on user_message events.
+    // Fall back to extractText for odd envelope shapes from history replay.
+    let text = (data && typeof data.text === 'string') ? data.text : extractText(data);
+    if (text == null) text = '';
     const attachments = Array.isArray(data && data.attachments) ? data.attachments : [];
     if (!text && !attachments.length) return;
+
+    // Late fill: ensureTurn() may have opened an empty shell when the first
+    // assistant/tool chunk beat user_message over SSE (or when an older
+    // client dropped user_message entirely). Prefer filling that shell.
+    if (this._fillEmptyUserTurn(text, attachments, {
+      ts: this._lastEventTs || Date.now(),
+      fromHistory: !!(opts && opts.fromHistory),
+    })) {
+      return;
+    }
+
     // Dedup: the live send() path calls startTurn(text) BEFORE the server
     // echoes user_message back over SSE. If the active turn already has the
     // same userText and no assistant/tools yet, the bubble is already there.

@@ -1380,9 +1380,22 @@ body::before {
   letter-spacing: 0.04em;
 }
 
-/* Mobile: stack the tools column below the chat. Split.js doesn't
-   initialize at this breakpoint (see chat.js _isChatMobile), so any
-   inline flex-basis is overridden here to keep the stacked layout. */
+/* Tool groups sitting inside a conversation turn (tools-in-chat pref). */
+.turn .tools-group {
+  border-bottom: none;
+  padding-bottom: 0;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.turn .tools-group__head {
+  display: none;
+}
+
+/* Mobile: hide the tools column entirely. A stacked second pane was
+   eating ~40vh and making chat nearly unusable on phones. Tool cards
+   only appear in-stream when the tools-in-chat preference is on
+   (see chat.ts _ensureToolsGroup / ui-prefs). Split.js does not
+   initialize at this breakpoint (_isChatMobile). */
 @media (max-width: 720px) {
   .chat-split {
     flex-direction: column;
@@ -1390,12 +1403,10 @@ body::before {
   .chat-split > .chat-stream {
     flex: 1 1 auto !important;
     min-width: 0;
+    min-height: 0;
   }
   .chat-tools-col {
-    flex: 0 0 auto !important;
-    border-left: none;
-    border-top: 1px solid var(--border);
-    max-height: 40vh;
+    display: none !important;
   }
 }
 

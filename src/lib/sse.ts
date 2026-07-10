@@ -9,6 +9,11 @@
 //   plus our own lifecycle ones: agent_status, prompt_complete, error.
 
 const KNOWN_EVENTS = [
+  // User input (emitted by the server when any client POSTs /prompt).
+  // Without this, remote browsers never receive the text and ensureTurn()
+  // creates empty "you" ghost bubbles when the assistant reply starts.
+  'user_message',
+  // Live ACP session updates
   'agent_message_chunk',
   'agent_thought_chunk',
   'tool_call',
@@ -16,10 +21,18 @@ const KNOWN_EVENTS = [
   'tool_call_delta_chunk',
   'available_commands_update',
   'session_summary_generated',
+  // Lifecycle / status
   'agent_status',
+  'agent_updated',
+  'agent_renamed',
+  'agent_exited',
+  'handshake',
+  'session_ready',
   'prompt_complete',
+  'prompt_result',
   'error',
   'session_notification',
+  'stderr',
 ] as const;
 
 export type StreamEventName = (typeof KNOWN_EVENTS)[number] | 'message';
