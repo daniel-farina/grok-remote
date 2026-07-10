@@ -11,6 +11,8 @@ import { applyTheme, getTheme, nextTheme, getThemeMeta } from './lib/themes.js';
 import { installVersionFooter } from './lib/version-footer.js';
 import { SYSTEM_PAGES, getSystemPage } from './views/system/index.js';
 import { iconHtml } from './lib/icons.js';
+import { middleTruncate } from './lib/format.js';
+import { applyAppIcon, getAppIconId } from './lib/app-icons.js';
 
 interface Agent {
   id: string;
@@ -54,7 +56,7 @@ window.addEventListener('grok-remote:theme-change', () => {
   syncThemeToggle(getTheme());
 });
 
-function setStatus(kind: string, text: string): void {
+function setStatus(kind: string, text: string, opts?: { title?: string }): void {
   const pill = document.getElementById('status-pill');
   const txt  = document.getElementById('status-text');
   if (!pill || !txt) return;
@@ -62,15 +64,52 @@ function setStatus(kind: string, text: string): void {
   pill.classList.add(`status-pill--${kind}`);
   pill.textContent = kind === 'ok' ? '●' : (kind === 'fail' ? '×' : (kind === 'warn' ? '!' : '·'));
   txt.textContent = text;
+  const title = (opts && opts.title) || text;
+  txt.setAttribute('title', title);
+  // Keep the status group itself hoverable with the full name.
+  const wrap = document.getElementById('status');
+  if (wrap) wrap.setAttribute('title', title);
+}
+
+/** Prefer MagicDNS, then tailscale hostname, then the page host. */
+function pickTailnetHost(ts: { dns?: string; hostname?: string } | null | undefined, pageHost?: string): string {
+  const dns = (ts && typeof ts.dns === 'string' && ts.dns.trim()) || '';
+  if (dns) return dns.replace(/\.$/, '');
+  const hn = (ts && typeof ts.hostname === 'string' && ts.hostname.trim()) || '';
+  if (hn) return hn;
+  return (pageHost || (typeof location !== 'undefined' ? location.hostname : '') || '').trim();
 }
 
 async function pingHello(): Promise<void> {
   try {
-    const data = await api.hello() as { tailscale?: { backend?: string } };
+    const data = await api.hello() as {
+      hostname?: string;
+      tailscale?: { backend?: string; dns?: string; hostname?: string; ip?: string };
+    };
     const ts = data && data.tailscale;
-    if (ts && ts.backend === 'Running') setStatus('ok', 'tailnet up');
-    else if (ts) setStatus('warn', `tailscale: ${ts.backend || 'unknown'}`);
-    else setStatus('warn', 'no tailscale identity');
+    const fullHost = pickTailnetHost(ts, data && data.hostname);
+    // Re-apply icon once we know the host so the auto-default (host-hash)
+    // and manifest short_name stay in sync with the machine we're on.
+    try { void applyAppIcon(undefined, { host: fullHost, fullHost }); } catch { /* ignore */ }
+
+    if (ts && ts.backend === 'Running') {
+      const label = fullHost
+        ? middleTruncate(fullHost, 24)
+        : 'tailnet up';
+      setStatus('ok', label, { title: fullHost || 'tailnet up' });
+    } else if (ts) {
+      const state = ts.backend || 'unknown';
+      const label = fullHost
+        ? `${middleTruncate(fullHost, 18)} · ${state}`
+        : `tailscale: ${state}`;
+      setStatus('warn', label, { title: fullHost ? `${fullHost} (${state})` : `tailscale: ${state}` });
+    } else if (fullHost) {
+      setStatus('warn', middleTruncate(fullHost, 24), {
+        title: `${fullHost} (no tailscale identity)`,
+      });
+    } else {
+      setStatus('warn', 'no tailscale identity');
+    }
   } catch {
     setStatus('fail', 'api unreachable');
   }
@@ -329,6 +368,10 @@ function mountDashboard(): void {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Paint the chosen (or host-hashed) homescreen icon ASAP so the tab /
+  // install banner reflect it before hello returns.
+  try { void applyAppIcon(getAppIconId()); } catch { /* ignore */ }
+
   void pingHello();
   setInterval(() => { void pingHello(); }, 10000);
 

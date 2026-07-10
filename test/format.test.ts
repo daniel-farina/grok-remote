@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fmtTokens } from '../src/lib/format.js';
+import { fmtTokens, middleTruncate } from '../src/lib/format.js';
 
 test('fmtTokens returns empty string for non-positive values', () => {
   assert.equal(fmtTokens(0), '');
@@ -33,4 +33,24 @@ test('fmtTokens uses M for 1M and above, stripping trailing .0', () => {
   assert.equal(fmtTokens(1_000_000), '1M');
   assert.equal(fmtTokens(2_500_000), '2.5M');
   assert.equal(fmtTokens(10_000_000), '10M');
+});
+
+
+test('middleTruncate leaves short strings alone', () => {
+  assert.equal(middleTruncate('aphrodite', 24), 'aphrodite');
+  assert.equal(middleTruncate('', 24), '');
+});
+
+test('middleTruncate keeps head and tail with an ellipsis', () => {
+  const host = 'aphrodite.barb-kardashev.ts.net';
+  const out = middleTruncate(host, 24);
+  assert.ok(out.length <= 24, out);
+  assert.ok(out.includes('…'), out);
+  assert.ok(out.startsWith('aphrod'), out);
+  assert.ok(out.endsWith('ts.net') || out.endsWith('.net') || out.endsWith('net'), out);
+});
+
+test('middleTruncate handles tiny budgets', () => {
+  assert.equal(middleTruncate('abcdefghij', 5).length, 5);
+  assert.equal(middleTruncate('ab', 1), '…');
 });

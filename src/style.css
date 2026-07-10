@@ -167,6 +167,14 @@ body::before {
   gap: 8px;
   font-size: 12px;
   color: var(--muted);
+  min-width: 0;
+}
+.status-text {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .status-pill {
   display: inline-flex;
@@ -3171,6 +3179,7 @@ body::before {
     gap: 6px;
   }
   .topbar-right { gap: 8px; }
+  .status-text { max-width: 14ch; }
   /* (brand-name + brand-version already hidden at 720px) */
   .figlet { font-size: 13px; }
   .chat-intro { padding: 8px 10px; }
@@ -9411,3 +9420,53 @@ body::before {
   padding: 1px 6px;
 }
 
+
+
+/* ===== settings: homescreen icon picker ===== */
+.app-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px;
+}
+.app-icon-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+.app-icon-card:hover { border-color: var(--border-2); }
+.app-icon-card--selected {
+  border-color: var(--teal);
+  background: var(--panel-2);
+  box-shadow: 0 0 0 1px rgba(94, 234, 212, 0.25);
+}
+.app-icon-card input[type="radio"] { display: none; }
+.app-icon-card__preview {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--bg);
+}
+.app-icon-card__img {
+  width: 40px;
+  height: 40px;
+  display: block;
+  border-radius: 10px;
+}
+.app-icon-card__label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+.app-icon-card--selected .app-icon-card__label { color: var(--teal); }
