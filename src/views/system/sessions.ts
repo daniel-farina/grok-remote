@@ -7,6 +7,7 @@ interface SessionItem {
   created?: string;
   status?: string;
   summary?: string;
+  cwd?: string;
 }
 
 interface SessionsState {
@@ -134,9 +135,10 @@ function render(): void {
         const hasAgent = state.agentIds.has(it.sessionId);
         const btnHtml = hasAgent
           ? `<button class="sessions-use" data-sid="${escapeHtml(it.sessionId)}" type="button">use in dashboard</button>`
-          : `<button class="sessions-use sessions-use--disabled" data-sid="${escapeHtml(it.sessionId)}" type="button"
-                   title="this session was created in the grok TUI, not in this dashboard. import it first.">
-               import first
+          : `<button class="sessions-use sessions-open" data-sid="${escapeHtml(it.sessionId)}"
+                   data-cwd="${escapeHtml(it.cwd || '')}" data-summary="${escapeHtml(it.summary || '')}" type="button"
+                   title="spawn a dashboard agent that resumes this session (session/load)">
+               open as chat
              </button>`;
         return `
           <tr class="sessions-row" data-sid="${escapeHtml(it.sessionId)}">
@@ -263,8 +265,30 @@ function wire(): void {
       e.stopPropagation();
       const sid = btn.getAttribute('data-sid');
       if (!sid) return;
-      if (btn.classList.contains('sessions-use--disabled')) {
-        showToast('session lives in the grok TUI. open the Import page first.');
+      if (btn.classList.contains('sessions-open')) {
+        const cwd = btn.getAttribute('data-cwd') || '';
+        const summary = (btn.getAttribute('data-summary') || '').slice(0, 60);
+        btn.textContent = 'opening…';
+        btn.setAttribute('disabled', 'disabled');
+        void (async () => {
+          try {
+            const agent = await api.createAgent({
+              ...(summary && summary !== '(no summary)' ? { name: summary } : {}),
+              ...(cwd ? { cwd } : {}),
+              resumeSessionId: sid,
+            }) as { id?: string } | null;
+            if (agent && agent.id) {
+              window.location.hash = `#/agents/${encodeURIComponent(agent.id)}`;
+            } else {
+              showToast('agent created but no id returned');
+            }
+          } catch (err) {
+            btn.textContent = 'open as chat';
+            btn.removeAttribute('disabled');
+            const msg = err instanceof Error ? err.message : String(err);
+            showToast(`failed to open: ${msg}`);
+          }
+        })();
         return;
       }
       window.location.hash = `#/agents/${sid}`;

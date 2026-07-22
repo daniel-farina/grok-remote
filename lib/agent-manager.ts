@@ -69,6 +69,9 @@ export interface AgentSpawnOptions {
   model?: string;
   cwd?: string;
   settings?: AcpClientSettings | null;
+  /** Adopt an existing store session: the first connect issues session/load
+   *  for this id instead of session/new. */
+  resumeSessionId?: string;
 }
 
 export interface AgentPatch {
@@ -568,7 +571,7 @@ export class AgentManager extends EventEmitter {
     client.on('stderr', (chunk: string) => emitEvent('stderr', { chunk }));
   }
 
-  async spawn({ name, model, cwd, settings }: AgentSpawnOptions = {}): Promise<PublicAgent> {
+  async spawn({ name, model, cwd, settings, resumeSessionId }: AgentSpawnOptions = {}): Promise<PublicAgent> {
     const id = randomUUID();
     ensureAgentDirs(id);
     const dir = agentDir(id);
@@ -584,7 +587,7 @@ export class AgentManager extends EventEmitter {
       cwd: workCwd,
       createdAt: nowIso(),
       lastSeen: nowIso(),
-      lastSessionId: null,
+      lastSessionId: resumeSessionId || null,
       lastError: null,
       starred: false,
       archived: false,

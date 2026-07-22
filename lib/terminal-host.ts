@@ -105,17 +105,27 @@ export function createTerminalHost({ getCwd }: TerminalHostOptions): TerminalHos
       ? params.outputByteLimit
       : DEFAULT_LIMIT;
     const envObj = envArrayToObject(params?.env);
-    const env: NodeJS.ProcessEnv = {
-      PATH: process.env['PATH'],
-      HOME: process.env['HOME'],
-      ...(envObj || {}),
-    };
+    // Windows child processes need the system env vars (SystemRoot, ComSpec,
+    // PATHEXT, ...) or PowerShell and most tools fail to start; a minimal
+    // {PATH, HOME} env only works on POSIX.
+    const env: NodeJS.ProcessEnv = process.platform === 'win32'
+      ? { ...process.env, ...(envObj || {}) }
+      : {
+          PATH: process.env['PATH'],
+          HOME: process.env['HOME'],
+          ...(envObj || {}),
+        };
 
     let cmd: string;
     let args: string[];
     if (Array.isArray(params?.args) && params.args.length) {
       cmd = command;
       args = params.args.map((a) => String(a));
+    } else if (process.platform === 'win32') {
+      // grok emits PowerShell-flavored commands on Windows (matching its own
+      // TUI and the desktop client), so cmd.exe would misparse them.
+      cmd = 'powershell.exe';
+      args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command];
     } else {
       cmd = '/bin/bash';
       args = ['-lc', command];
@@ -146,6 +156,13 @@ export function createTerminalHost({ getCwd }: TerminalHostOptions): TerminalHos
     proc.stderr?.on('data', (d: Buffer) => append(t, d));
     proc.on('error', (err: Error) => {
       append(t, `\n[terminal-host] spawn error: ${err.message}\n`);
+      // A failed spawn (e.g. ENOENT) never emits 'exit'; settle waiters so
+      // waitForExit callers don't hang forever on a command that never ran.
+      if (!t.exited) {
+        t.exited = true;
+        t.exitStatus = { exitCode: null, signal: null };
+        for (const w of t.waiters.splice(0)) w({ exitStatus: t.exitStatus });
+      }
     });
     proc.on('exit', (code, signal) => {
       t.exited = true;
