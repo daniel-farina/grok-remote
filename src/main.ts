@@ -397,10 +397,8 @@ function isSidebarCollapsed(): boolean {
 function installToolsToggle(): void {
   const btn = document.getElementById('topbar-sidebar-right') as HTMLElement | null;
   if (!btn) return;
-  if (isMobileViewport()) {
-    btn.hidden = true;
-    return;
-  }
+  // Shown on mobile too — toggles the stacked tool-calls pane (collapse /
+  // expand). Previously hidden, which left no way to free chat space.
   btn.hidden = false;
   let collapsed = false;
   function paint(): void {

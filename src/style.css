@@ -1390,12 +1390,32 @@ body::before {
   .chat-split > .chat-stream {
     flex: 1 1 auto !important;
     min-width: 0;
+    min-height: 0;
   }
   .chat-tools-col {
     flex: 0 0 auto !important;
     border-left: none;
     border-top: 1px solid var(--border);
     max-height: 40vh;
+  }
+  /* Collapsed tools pane: reclaim full height for the conversation.
+     Matches desktop .chat-split--tools-collapsed rules; reinforced here
+     so the stacked mobile flex layout doesn't keep a residual strip. */
+  .chat-split--tools-collapsed > .chat-tools-col {
+    display: none !important;
+  }
+  .chat-split--tools-collapsed > .chat-stream {
+    flex: 1 1 auto !important;
+    max-height: none;
+  }
+  /* Fullscreen tools would hide .chat-stream entirely — never allow on mobile. */
+  .chat-split--tools-fullscreen > .chat-stream {
+    display: flex !important;
+  }
+  .chat-split--tools-fullscreen > .chat-tools-col {
+    flex: 0 0 auto !important;
+    max-height: 40vh;
+    width: auto !important;
   }
 }
 

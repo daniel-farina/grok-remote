@@ -1739,19 +1739,34 @@ export class ChatView {
     return window.innerWidth <= ChatView.CHAT_SPLIT_MOBILE_MAX;
   }
 
+  _readChatSplitCollapsed(defaultCollapsed = false) {
+    try {
+      const raw = localStorage.getItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY);
+      if (raw === '1') return true;
+      if (raw === '0') return false;
+    } catch { /* ignore */ }
+    return !!defaultCollapsed;
+  }
+
   _initChatSplit() {
     if (this._chatSplit) return;
-    // Mobile: don't init Split.js. CSS stacks the tools column below the
-    // chat stream (see .chat-split @media block). Hide the in-header toggle
-    // since it has no meaning when the layout is stacked.
+    // Mobile: no Split.js — CSS stacks tools under chat. Still honor the
+    // collapsed flag so the tools pane can be fully hidden (default: hidden
+    // on first mobile visit so conversation gets the screen).
     if (this._isChatMobile()) {
       if (this._splitToggleBtn) this._splitToggleBtn.hidden = true;
+      // Fullscreen tools has no meaning on a stacked layout and would hide
+      // the conversation entirely via CSS — force it off.
+      this._toolsColFullscreen = false;
+      this._chatSplitCollapsed = this._readChatSplitCollapsed(true);
+      this._applyChatSplitCollapsedClass();
+      this._applyToolsFullscreenClass();
+      this._updateToolsToggleLabel();
       return;
     }
     if (this._splitToggleBtn) this._splitToggleBtn.hidden = false;
 
-    let collapsed = false;
-    try { collapsed = localStorage.getItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY) === '1'; } catch { /* ignore */ }
+    const collapsed = this._readChatSplitCollapsed(false);
     // Seed the cached "last sizes" from the currently active tab so an
     // expand-after-collapse comes back to the right width for that tab.
     this._chatSplitLastSizes = this._readChatSplitSizesForTab(this._toolsColTab);
@@ -1815,15 +1830,16 @@ export class ChatView {
   }
 
   _toggleToolsCol() {
-    // Mobile: stacked layout, no Split.js, no-op.
-    if (this._isChatMobile()) return;
     const next = !this._chatSplitCollapsed;
     this._chatSplitCollapsed = next;
     try { localStorage.setItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
-    if (next) {
-      this._destroyChatSplit();
-    } else if (this._chatSplitBuild) {
-      this._chatSplitBuild(this._chatSplitLastSizes);
+    // Mobile: stacked layout, no Split.js — only the collapsed CSS class matters.
+    if (!this._isChatMobile()) {
+      if (next) {
+        this._destroyChatSplit();
+      } else if (this._chatSplitBuild) {
+        this._chatSplitBuild(this._chatSplitLastSizes);
+      }
     }
     this._applyChatSplitCollapsedClass();
     this._updateToolsToggleLabel();
