@@ -5,7 +5,7 @@
 //   - /api/*: network-first, never cached (live data).
 //   - other same-origin GETs: cache-first with background revalidation.
 
-const CACHE = 'gr-shell-v6-revert-bottom';
+const CACHE = 'gr-shell-v7-turn-order';
 const SHELL_URLS = ['/', '/index.html', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {

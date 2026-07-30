@@ -98,6 +98,8 @@ export class ChatView {
   _toolsFilesMounted!: any;
   _toolsTabBtns!: any;
   activeTurn!: any;
+  _historyGen!: number;
+  _historyLoading!: boolean;
   agentId!: any;
   availableCommands!: any;
   bgTermsStripEl!: any;
@@ -152,6 +154,8 @@ export class ChatView {
     this.stream  = null;
     this.turns   = []; // each: { user, thinking, tools[], assistant, footer, root }
     this.activeTurn = null;
+    this._historyGen = 0;
+    this._historyLoading = false;
     this.availableCommands = [];
     this.tabsState = 'conversation';
 
@@ -278,6 +282,9 @@ export class ChatView {
     // visibility change -> refresh history on becoming visible
     this._onVisibility = () => {
       if (document.visibilityState === 'visible' && this.agentId) {
+        // Never rebuild the stream while a live turn is open — that race
+        // reorders thinking / user / assistant bubbles (see refreshHistory).
+        if (this.activeTurn) return;
         this.refreshHistory().catch(() => {});
       }
     };
@@ -1027,7 +1034,7 @@ export class ChatView {
     }
 
     const agentIdAtCall = agent.id;
-    this.refreshHistory()
+    this.refreshHistory({ force: true })
       .catch((e) => this.showStatus(`history load failed: ${e.message}`, 'warn'))
       .finally(() => {
         // Only show the intro if the agent we loaded history for is still
@@ -1253,12 +1260,28 @@ export class ChatView {
     }
   }
 
-  async refreshHistory({ all = false, turns = 50 } = {}) {
+  async refreshHistory({ all = false, turns = 50, force = false } = {}) {
     if (!this.agentId) return;
+    // Live send() opens activeTurn before SSE fills it. Rebuilding the stream
+    // mid-turn (visibilitychange, overlapping loads) wipes the user bubble and
+    // reattaches subsequent thought/message chunks to a new empty turn — the
+    // classic "thinking + my message above the previous assistant reply" bug.
+    if (!force && this.activeTurn && !this._isReplaying) {
+      return;
+    }
     this._historyAll = !!all;
+    const agentId = this.agentId;
+    const gen = ++this._historyGen;
     try {
-      const hist: any = await api.history(this.agentId, { turns, all });
+      const hist: any = await api.history(agentId, { turns, all });
+      // Stale or superseded load (agent switch / newer refresh started).
+      if (gen !== this._historyGen || this.agentId !== agentId) return;
+      // A live turn may have started while we awaited history.
+      if (!force && this.activeTurn && !this._isReplaying) return;
+
       const events: any[] = (hist && Array.isArray(hist.events)) ? hist.events : [];
+      // Block live SSE from attaching mid-rebuild (stream is about to be wiped).
+      this._historyLoading = true;
       this.streamEl.replaceChildren();
       if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
       this.turns = [];
@@ -1270,11 +1293,13 @@ export class ChatView {
         this.streamEl.appendChild(this._buildLoadEarlierBanner(total - returned));
       }
       this._isReplaying = true;
+      let lastEventName: string | null = null;
       try {
         for (const ev of events) {
           const name = ev.event || ev.type || ev.name;
           const data = ev.data || ev.payload || ev;
           if (!name) continue;
+          lastEventName = name;
           // Stash event timestamp so bubble renders pick up the real time
           // rather than "now" during a history replay.
           const t = Date.parse(ev.at);
@@ -1285,17 +1310,30 @@ export class ChatView {
         this._isReplaying = false;
       }
       this._lastEventTs = null;
-      // History replay may end with an unterminated turn (interrupted session,
-      // or a prompt_complete that never made it to disk). Walk every turn and
-      // finalize any thinking pane that is still in its active/blinking state
-      // so the dots stop animating. Then close out the final active turn so
-      // the assistant bubble is finalized too.
+
+      // Finalize thinking only on turns that are truly closed. If history ends
+      // mid-prompt (no prompt_complete), KEEP activeTurn open so live SSE
+      // continues on the same user bubble instead of ensureTurn('') orphans.
+      const incomplete = !!this.activeTurn;
+      const agentRunning = !!(this.currentAgent && (
+        this.currentAgent.status === 'running' ||
+        (typeof this.currentAgent.inFlight === 'number' && this.currentAgent.inFlight > 0)
+      ));
+      const keepOpen = incomplete && (
+        agentRunning ||
+        (lastEventName != null && lastEventName !== 'prompt_complete')
+      );
+
       for (const turn of this.turns) {
+        if (keepOpen && turn === this.activeTurn) continue;
         if (turn.thinking && typeof turn.thinking.finalize === 'function') {
           turn.thinking.finalize();
         }
       }
-      if (this.activeTurn) this.endTurn(null);
+      if (this.activeTurn && !keepOpen) {
+        this.endTurn(null);
+      }
+
       // Scroll the stream to the bottom after a history load. Reset
       // auto-scroll: the user just opened the conversation, they want to be
       // at the latest message regardless of where the last session ended.
@@ -1306,6 +1344,8 @@ export class ChatView {
       });
     } catch (e) {
       // backend may not implement history yet
+    } finally {
+      if (gen === this._historyGen) this._historyLoading = false;
     }
   }
 
@@ -1316,7 +1356,7 @@ export class ChatView {
       onclick: async () => {
         btn.disabled = true;
         btn.textContent = 'loading...';
-        await this.refreshHistory({ all: true });
+        await this.refreshHistory({ all: true, force: true });
       },
     }, `load all earlier turns (${missingCount} more)`);
     return el('div', { class: 'history-load-more' }, btn);
@@ -1359,6 +1399,16 @@ export class ChatView {
 
   ensureTurn() {
     if (this.activeTurn) return this.activeTurn;
+    // Prefer reopening the last incomplete turn over spawning an empty
+    // user bubble. History replay used to endTurn() incomplete streams,
+    // then the next thought chunk created a new turn — thinking and the
+    // real user message ended up in the wrong order relative to prior
+    // assistant output.
+    const last = this.turns.length ? this.turns[this.turns.length - 1] : null;
+    if (last && !last.footer) {
+      this.activeTurn = last;
+      return last;
+    }
     return this.startTurn('', { ts: this._lastEventTs || Date.now() });
   }
 
@@ -2301,6 +2351,9 @@ export class ChatView {
   // ── event dispatch ──────────────────────────────────────────────────
 
   handleEvent(name: any, payload: any, opts?: any) {
+    // Live SSE during a history DOM rebuild would attach to a half-wiped
+    // turns[] and produce out-of-order bubbles. History-sourced events pass.
+    if (this._historyLoading && !(opts && opts.fromHistory)) return;
     const data = unwrap(payload);
     switch (name) {
       case 'user_message':              return this.onUserMessage(data, opts);
@@ -2367,7 +2420,18 @@ export class ChatView {
     const turn = this.ensureTurn();
     if (!turn.thinking) {
       turn.thinking = renderThinkingPane();
-      turn.root.appendChild(turn.thinking.node);
+      // Always sit between the user bubble and any assistant output.
+      // appendChild would place thinking *after* an early assistant chunk
+      // when the model streams message before (or interleaved with) thought.
+      const before =
+        (turn.assistant && turn.assistant.node) ||
+        turn.footer ||
+        null;
+      if (before && before.parentNode === turn.root) {
+        turn.root.insertBefore(turn.thinking.node, before);
+      } else {
+        turn.root.appendChild(turn.thinking.node);
+      }
     }
     turn.thinking.append(text);
     this.scrollToBottom();

@@ -2032,6 +2032,13 @@ body[data-chrome-collapsed] .dashboard {
   contain: layout style;
 }
 .composer-input:focus { border-color: var(--teal); }
+/* Placeholder must read clearly as non-content: dimmer than --muted body text. */
+.composer-input::placeholder {
+  color: var(--dim);
+  opacity: 1; /* Firefox defaults to ~0.54 on top of color; keep one source of truth */
+}
+.composer-input::-webkit-input-placeholder { color: var(--dim); }
+.composer-input::-moz-placeholder { color: var(--dim); opacity: 1; }
 .composer-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
