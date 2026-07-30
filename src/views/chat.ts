@@ -138,6 +138,8 @@ export class ChatView {
   tabsState!: any;
   toastHost!: any;
   tokensPill!: any;
+
+  chromeCollapseBtn: any;
   toolsColEl!: any;
   toolsFilesPaneEl!: any;
   toolsStreamEl!: any;
@@ -407,6 +409,22 @@ export class ChatView {
       title: 'Copy entire conversation as plain text',
       onclick: () => this.copyConversation(),
     }, 'copy');
+    // Collapse top chrome (topbar + rail + tabs) so the stream gets more
+    // vertical room — especially useful on mobile. State lives on <body>
+    // and is driven by main.ts; this is just a convenient in-tabs entry.
+    const chromeBtn = el('button', {
+      class: 'tab-action tab-action--icon-only tab-action--chrome',
+      type: 'button',
+      title: 'Hide top chrome (more room for chat)',
+      'aria-label': 'hide top chrome',
+      onclick: () => {
+        document.dispatchEvent(new CustomEvent('grok-remote:chrome-set', {
+          detail: { collapsed: true },
+        }));
+      },
+    });
+    chromeBtn.innerHTML = `<span class="tab-action-ico">${iconHtml('chevrons-up')}</span>`;
+    this.chromeCollapseBtn = chromeBtn;
     this.tokensPill = el('span', { class: 'tab-tokens', hidden: true });
     this.inflightPill = el('span', { class: 'tab-inflight', hidden: true });
     return el('nav', { class: 'tabs' },
@@ -423,6 +441,7 @@ export class ChatView {
         this.settingsBtn,
         this.connectBtn,
         this.copyConvoBtn,
+        this.chromeCollapseBtn,
       ),
     );
   }

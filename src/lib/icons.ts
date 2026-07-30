@@ -140,6 +140,14 @@ export const ICONS = {
     <line x1="11" y1="9" x2="17" y2="3"/>
     <line x1="3" y1="17" x2="9" y2="11"/>
   `),
+  'chevrons-up': wrap(`
+    <polyline points="5 11 10 6 15 11"/>
+    <polyline points="5 15 10 10 15 15"/>
+  `),
+  'chevrons-down': wrap(`
+    <polyline points="5 5 10 10 15 5"/>
+    <polyline points="5 9 10 14 15 9"/>
+  `),
   wrench: wrap(`
     <path d="M14 6.5a3.5 3.5 0 0 1-4.5 3.36L4 15.36 6.64 18l5.5-5.5A3.5 3.5 0 1 0 14 6.5z"/>
     <path d="M14 6.5l-1.7-1.7a1 1 0 0 1 0-1.4l1-1a1 1 0 0 1 1.4 0L17.6 5.3"/>
