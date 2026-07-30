@@ -241,6 +241,18 @@ body[data-chrome-collapsed] .chat > .tabs {
 body[data-chrome-collapsed] .dashboard {
   border-top: none;
 }
+
+/* Height of the chrome-peek content box (padding + 36px controls + border),
+   excluding safe-area. Safe-area is added at the drawer offset use site.
+   Defined on :root/:body so the fixed drawer (outside .chrome-peek) can read it. */
+:root {
+  --chrome-peek-body-height: 49px; /* 6 + 36 + 6 + 1 */
+}
+@media (max-width: 720px) {
+  :root {
+    --chrome-peek-body-height: 45px; /* 4 + 36 + 4 + 1 */
+  }
+}
 .chrome-peek__btn {
   background: transparent;
   border: 1px solid var(--border);
@@ -3208,7 +3220,7 @@ body[data-drawer-open] .drawer-backdrop {
     /* well above .drawer-backdrop (z-index 30) and the install banner */
     z-index: 40;
     transform: translateX(-100%);
-    transition: transform 0.22s ease;
+    transition: transform 0.22s ease, top 0.22s ease;
     border-right: 1px solid var(--border);
     border-bottom: none;
     max-height: none;
@@ -3222,6 +3234,20 @@ body[data-drawer-open] .drawer-backdrop {
   body[data-drawer-open] .sidebar { transform: translateX(0); }
   body:not([data-drawer-open]) .drawer-backdrop { display: none !important; }
   body[data-drawer-open] .drawer-backdrop { display: block !important; }
+
+  /* Chrome-peek lives outside .app with a higher stacking order than the
+     whole app tree. Without an offset it paints over the drawer head and
+     hides "+ new" / the top of the conversation list. Sit the drawer and
+     its backdrop just below the peek strip so the panel stays usable and
+     a strip of the active conversation remains visible above the dimmer. */
+  body[data-chrome-collapsed] .sidebar {
+    top: calc(var(--chrome-peek-body-height, 45px) + env(safe-area-inset-top, 0px));
+    /* safe-area is already accounted for in `top` */
+    padding-top: 12px;
+  }
+  body[data-chrome-collapsed] .drawer-backdrop {
+    top: calc(var(--chrome-peek-body-height, 45px) + env(safe-area-inset-top, 0px));
+  }
 
   .main-pane { width: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
