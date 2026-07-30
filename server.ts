@@ -20,7 +20,7 @@ import {
 } from './lib/folders.js';
 import { startRetentionTimer } from './lib/retention.js';
 import { inferDevServerUrl } from './lib/dev-url.js';
-import { readAll as readHistory } from './lib/history.js';
+import { readAll as readHistory, dedupeHistoryByUpstreamEventId } from './lib/history.js';
 import { writeHeaders as sseHeaders, writeEvent as sseWrite, writePing as ssePing } from './lib/sse.js';
 import { buildTrace, buildTraceForSessionId } from './lib/trace-host.js';
 import { handleSystem } from './lib/routes/system.js';
@@ -637,7 +637,10 @@ interface SliceHistoryResult { text: string; totalTurns: number; returnedTurns: 
 
 function sliceHistoryByTurns(raw: string, { all, turns }: SliceHistoryOptions): SliceHistoryResult {
   if (!raw) return { text: '', totalTurns: 0, returnedTurns: 0 };
-  const lines = raw.split('\n').filter(Boolean);
+  // Strip session-resume duplicates so the client never re-paints prior
+  // assistant text into the latest bubble when reloading after reconnect.
+  const deduped = dedupeHistoryByUpstreamEventId(raw);
+  const lines = deduped.split('\n').filter(Boolean);
   const userMessageIndices: number[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] || '';

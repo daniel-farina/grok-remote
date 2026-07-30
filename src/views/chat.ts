@@ -5,7 +5,11 @@
 //   1. user bubble
 //   2. thinking pane (collapsed) from agent_thought_chunk
 //   3. tool_call cards, patched by tool_call_update + tool_call_delta_chunk
-//   4. assistant message from agent_message_chunk
+//   4. assistant message(s) from agent_message_chunk — a long tool-using
+//      turn often streams intermediate status lines between tool batches;
+//      each batch of message chunks after tools becomes its own bubble so
+//      the latest message is only the newest segment, not a growing dump
+//      of everything said so far in the turn
 //   5. token-usage footer from prompt_complete
 //
 // Plus: available_commands_update, session_summary_generated,
@@ -32,7 +36,7 @@ import {
   renderErrorBanner,
   renderToast,
 } from '../lib/render';
-import { unwrap, extractText } from '../lib/acp-payload.js';
+import { unwrap, extractText, upstreamEventId } from '../lib/acp-payload.js';
 import { copyToClipboard, serializeConversation, serializeResumeCommand } from '../lib/copy';
 import { iconHtml } from '../lib/icons';
 import { fmtTokens } from '../lib/format';
@@ -148,6 +152,8 @@ export class ChatView {
   traceMounted!: any;
   tracePane!: any;
   turns!: any;
+  /** Upstream ACP `_meta.eventId` values already applied to the stream. */
+  _seenUpstreamEventIds!: Set<string>;
 
   constructor() {
     this.agentId = null;
@@ -156,6 +162,7 @@ export class ChatView {
     this.activeTurn = null;
     this._historyGen = 0;
     this._historyLoading = false;
+    this._seenUpstreamEventIds = new Set();
     this.availableCommands = [];
     this.tabsState = 'conversation';
 
@@ -937,6 +944,7 @@ export class ChatView {
     if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
     this.turns = [];
     this.activeTurn = null;
+    this._seenUpstreamEventIds = new Set();
     // Fire-and-forget skill cache warmup so the banner can paint as soon
     // as a /name message lands. Harmless if the agent has none.
     this._loadSkills();
@@ -1286,6 +1294,9 @@ export class ChatView {
       if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
       this.turns = [];
       this.activeTurn = null;
+      // Rebuild the dedupe set from this history pass so a subsequent SSE
+      // ring replay (or session-resume dump) does not re-append old chunks.
+      this._seenUpstreamEventIds = new Set();
       // If there are older turns we didn't load, show a banner at the top.
       const total = (hist && hist.totalTurns) || 0;
       const returned = (hist && hist.returnedTurns) || 0;
@@ -1434,7 +1445,10 @@ export class ChatView {
       userAttachments: attachments,
       thinking:  null,
       tools:     [],
+      // Current open assistant bubble (null after tools seal it).
       assistant: null,
+      // All assistant bubbles this turn, in order (interim + final).
+      assistants: [] as any[],
       footer:    null,
       root,
     };
@@ -1449,13 +1463,33 @@ export class ChatView {
   endTurn(meta: any) {
     if (!this.activeTurn) return;
     if (this.activeTurn.thinking) this.activeTurn.thinking.finalize();
-    if (this.activeTurn.assistant) this.activeTurn.assistant.finalize();
+    // Finalize every assistant bubble this turn (interim status + final).
+    const bubbles = (this.activeTurn.assistants && this.activeTurn.assistants.length)
+      ? this.activeTurn.assistants
+      : (this.activeTurn.assistant ? [this.activeTurn.assistant] : []);
+    for (const b of bubbles) {
+      if (b && typeof b.finalize === 'function') b.finalize();
+    }
     const footer = renderTokenFooter(meta || {});
     this.activeTurn.root.appendChild(footer);
     this.activeTurn.footer = footer;
     this.activeTurn = null;
     this.composerCancel.disabled = true;
     this.scrollToBottom();
+  }
+
+  /**
+   * Close the open assistant bubble so the next agent_message_chunk starts a
+   * fresh one. Long tool-using turns stream many intermediate status lines
+   * interleaved with tools; without sealing, they all concatenate into one
+   * ever-growing "latest" message.
+   */
+  _sealAssistant(turn: any) {
+    if (!turn || !turn.assistant) return;
+    if (typeof turn.assistant.finalize === 'function') {
+      turn.assistant.finalize();
+    }
+    turn.assistant = null;
   }
 
   scrollToBottom(opts?: any) {
@@ -2354,6 +2388,17 @@ export class ChatView {
     // Live SSE during a history DOM rebuild would attach to a half-wiped
     // turns[] and produce out-of-order bubbles. History-sourced events pass.
     if (this._historyLoading && !(opts && opts.fromHistory)) return;
+
+    // Grok re-emits prior session/update events on resume with a stable
+    // `_meta.eventId`. Without this gate, every reconnect concatenates all
+    // historical assistant text into the latest bubble. The SSE ring can
+    // also re-deliver events already painted from history on first open.
+    const uid = upstreamEventId(payload);
+    if (uid) {
+      if (this._seenUpstreamEventIds.has(uid)) return;
+      this._seenUpstreamEventIds.add(uid);
+    }
+
     const data = unwrap(payload);
     switch (name) {
       case 'user_message':              return this.onUserMessage(data, opts);
@@ -2400,11 +2445,13 @@ export class ChatView {
     const text = extractText(data);
     if (text == null) return;
     const turn = this.ensureTurn();
-    const fresh = !turn.assistant;
-    if (fresh) {
+    // After tools (or if no bubble yet), open a new assistant bubble. Consecutive
+    // token deltas keep appending to the same open bubble.
+    if (!turn.assistant) {
       turn.assistant = renderAssistantBubble(this._lastEventTs || Date.now());
-      // Mark the assistant bubble for entrance animation only on first
-      // insertion in the live path (skip during history replay).
+      if (!Array.isArray(turn.assistants)) turn.assistants = [];
+      turn.assistants.push(turn.assistant);
+      // Mark for entrance animation only on live insertions.
       if (!this._isReplaying && !(opts && opts.fromHistory)) {
         turn.assistant.node.classList.add('msg--enter');
       }
@@ -2501,6 +2548,9 @@ export class ChatView {
     if (this._maybeRouteTodoToolCall(data, opts)) return;
 
     const turn = this.ensureTurn();
+    // Any tool work ends the current assistant segment so later narration
+    // does not glue onto the previous status line.
+    this._sealAssistant(turn);
     const card = renderToolCard(data);
     turn.tools.push({ id: data.toolCallId, card });
     const live = !this._isReplaying && !(opts && opts.fromHistory);
@@ -2530,6 +2580,7 @@ export class ChatView {
       entry.card.applyUpdate(data);
     } else {
       // server might emit an update before we ever saw a tool_call. create one.
+      this._sealAssistant(turn);
       const card = renderToolCard(data);
       turn.tools.push({ id: data.toolCallId, card });
       const live = !this._isReplaying && !(opts && opts.fromHistory);
