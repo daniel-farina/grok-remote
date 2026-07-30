@@ -243,6 +243,23 @@ function mountDashboard(): void {
   installToolsToggle();
   installChromeCollapse();
 
+  // When the user collapses top chrome from Memory / Flow / settings / a
+  // non-conversation chat tab, land on the conversation stream. Collapse
+  // hides the rail + tabs that would otherwise let them leave that view.
+  document.addEventListener('grok-remote:chrome-collapse-focus', () => {
+    const route = parseRoute();
+    if (route.name === 'system' || route.name === 'settings') {
+      const id = currentAgent?.id || sidebar.selectedId;
+      if (id) navigate(`#/agents/${encodeURIComponent(id)}`);
+      else navigate('#/');
+    }
+    // hashchange runs synchronously for location.hash writes; microtask
+    // covers the case where chat was just re-mounted by renderRoute.
+    queueMicrotask(() => {
+      try { chat.focusConversation(); } catch { /* ignore */ }
+    });
+  });
+
   const settingsBtn = document.getElementById('open-settings');
   if (settingsBtn) {
     settingsBtn.innerHTML = iconHtml('settings');
@@ -462,13 +479,21 @@ function isChromeCollapsed(): boolean {
   return isMobileViewport();
 }
 
-function setChromeCollapsed(collapsed: boolean): void {
+function setChromeCollapsed(collapsed: boolean, opts: { focusChat?: boolean } = {}): void {
   try { localStorage.setItem(CHROME_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { /* ignore */ }
   if (collapsed) document.body.setAttribute('data-chrome-collapsed', '');
   else document.body.removeAttribute('data-chrome-collapsed');
   const peek = document.getElementById('chrome-peek') as HTMLElement | null;
   if (peek) peek.hidden = !collapsed;
   paintChromeToggleButtons(collapsed);
+  // Collapsing hides the left-rail + chat tabs, so any non-conversation view
+  // (Memory / Flow tab / settings / …) would otherwise stay on screen with no
+  // way to leave it until the user expands chrome again. Snap back to the
+  // conversation stream so hide/show is route-agnostic, not owned by the
+  // first rail item / Conversation tab.
+  if (collapsed && opts.focusChat) {
+    document.dispatchEvent(new CustomEvent('grok-remote:chrome-collapse-focus'));
+  }
 }
 
 function paintChromeToggleButtons(collapsed: boolean): void {
@@ -501,7 +526,10 @@ function installChromeCollapse(): void {
   const peekMenu = document.getElementById('chrome-peek-menu') as HTMLElement | null;
   const peekTools = document.getElementById('chrome-peek-tools') as HTMLElement | null;
 
-  const apply = (collapsed: boolean) => setChromeCollapsed(collapsed);
+  // User-initiated collapse focuses chat; restoring a saved preference does not
+  // (deep links / refresh should keep the current route).
+  const apply = (collapsed: boolean, opts: { focusChat?: boolean } = {}) =>
+    setChromeCollapsed(collapsed, opts);
 
   // Restore persisted preference.
   apply(isChromeCollapsed());
@@ -509,7 +537,7 @@ function installChromeCollapse(): void {
   if (topbarBtn) {
     topbarBtn.addEventListener('click', (ev) => {
       ev.preventDefault();
-      apply(true);
+      apply(true, { focusChat: true });
     });
   }
   if (peekExpand) {
@@ -532,12 +560,13 @@ function installChromeCollapse(): void {
   }
   // External toggles (chat tabs control) use this event.
   document.addEventListener('grok-remote:chrome-toggle', () => {
-    apply(!isChromeCollapsed());
+    const next = !isChromeCollapsed();
+    apply(next, { focusChat: next });
   });
   document.addEventListener('grok-remote:chrome-set', (ev: Event) => {
     const ce = ev as CustomEvent<{ collapsed?: boolean }>;
     if (ce && ce.detail && typeof ce.detail.collapsed === 'boolean') {
-      apply(ce.detail.collapsed);
+      apply(ce.detail.collapsed, { focusChat: ce.detail.collapsed });
     }
   });
   // Keep peek tools icon in sync when tools panel state changes.
