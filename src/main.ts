@@ -323,10 +323,25 @@ function mountDashboard(): void {
       settings.setActive(route.sub);
       return;
     }
-    unmountActiveSystemPage();
-    unmountActiveSettings();
-    mainHost.replaceChildren();
+
+    // Chat (home + per-agent) is a long-lived view. Remounting it on every
+    // sidebar click tore down Split.js, wiped the stream, and raced history
+    // reload — sometimes leaving a black empty pane until the next send.
+    // Stay mounted when switching agents or bouncing home ↔ agent.
+    const wantsChat = route.name === 'chat' || route.name === 'home';
+    const chatAlreadyMounted = wantsChat && mainHost.contains(chat.root);
+
+    if (!chatAlreadyMounted) {
+      unmountActiveSystemPage();
+      unmountActiveSettings();
+      mainHost.replaceChildren();
+    } else {
+      // Still drop non-chat pages if somehow both were active.
+      unmountActiveSystemPage();
+      unmountActiveSettings();
+    }
     updateRailHighlight(route);
+
     if (route.name === 'system') {
       const page = getSystemPage(route.area) as SystemPageRef | null;
       if (page && page.module && typeof page.module.mount === 'function') {
@@ -342,7 +357,7 @@ function mountDashboard(): void {
       return;
     }
     if (route.name === 'chat') {
-      chat.mount(mainHost);
+      if (!chatAlreadyMounted) chat.mount(mainHost);
       const found = sidebar.agents.find((a: Agent) => a.id === route.agentId);
       if (found) {
         currentAgent = found;
@@ -350,19 +365,28 @@ function mountDashboard(): void {
         sidebar.renderList();
         chat.setAgent(found);
       } else {
-        api.getAgent(route.agentId).then((a: unknown) => {
-          currentAgent = (a as Agent | null) || { id: route.agentId };
+        // Stale route while list still loading: fetch the record, but only
+        // apply it if the user hasn't navigated away mid-flight.
+        const wantId = route.agentId;
+        api.getAgent(wantId).then((a: unknown) => {
+          if (parseRoute().name !== 'chat') return;
+          const r = parseRoute();
+          if (r.name !== 'chat' || r.agentId !== wantId) return;
+          currentAgent = (a as Agent | null) || { id: wantId };
           sidebar.selectedId = currentAgent.id;
           sidebar.renderList();
           chat.setAgent(currentAgent);
         }).catch(() => {
-          currentAgent = { id: route.agentId };
+          if (parseRoute().name !== 'chat') return;
+          const r = parseRoute();
+          if (r.name !== 'chat' || r.agentId !== wantId) return;
+          currentAgent = { id: wantId };
           chat.setAgent(currentAgent);
         });
       }
       return;
     }
-    chat.mount(mainHost);
+    if (!chatAlreadyMounted) chat.mount(mainHost);
     chat.setAgent(null);
   }
 

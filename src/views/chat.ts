@@ -321,13 +321,23 @@ export class ChatView {
   }
 
   mount(parent: any) {
-    parent.appendChild(this.root);
-    // Split.js needs the panes to actually be in the DOM to read sizes,
-    // so we init the inner chat split here, not in the constructor.
-    // Tear down any previous instance first (mount is re-entrant when the
-    // user navigates between routes).
-    this._destroyChatSplit();
-    this._initChatSplit();
+    // Idempotent: agent switches keep the chat view mounted. Re-running
+    // Split.js init on an already-attached root used to leave panes at
+    // zero size (black stream) until the next layout-forcing action.
+    const alreadyHere = this.root.parentElement === parent;
+    if (!alreadyHere) {
+      parent.appendChild(this.root);
+      // Split.js needs the panes to actually be in the DOM to read sizes,
+      // so we init the inner chat split here, not in the constructor.
+      // Tear down any previous instance first (mount is re-entrant when the
+      // user navigates between routes).
+      this._destroyChatSplit();
+      this._initChatSplit();
+    } else if (!this._chatSplit && !this._chatSplitCollapsed && !this._isChatMobile()) {
+      // Re-attached path handled above; if split was never built (e.g. was
+      // collapsed, then expanded off-DOM) rebuild when visible.
+      this._initChatSplit();
+    }
     // External topbar button toggles tools panel via this event. Keep one
     // listener for the document lifetime by guarding with a flag.
     if (!ChatView._toolsToggleWired) {
@@ -673,6 +683,18 @@ export class ChatView {
   // tab or a wide tools column from a previous agent.
   focusConversation() {
     this.switchTab('conversation');
+    // Fullscreen tools hides .chat-stream entirely. Combined with a
+    // collapsed tools column that yields a pure black pane — and selecting
+    // a session used to land there. Always restore the conversation stream.
+    if (this._toolsColFullscreen) {
+      this._toolsColFullscreen = false;
+      try { localStorage.setItem(ChatView.CHAT_TOOLS_FULLSCREEN_KEY, '0'); } catch { /* ignore */ }
+      this._applyToolsFullscreenClass();
+      if (this._splitFullscreenBtn) {
+        this._splitFullscreenBtn.innerHTML = iconHtml('maximize-2');
+        this._splitFullscreenBtn.title = 'expand tools panel';
+      }
+    }
     if (!this._isChatMobile() && !this._chatSplitCollapsed) {
       this._toggleToolsCol();
     }
@@ -938,9 +960,56 @@ export class ChatView {
 
   setAgent(agent: any) {
     // agent: { id, ... } or null
+    // Soft path: already showing this agent. Re-select / remount used to wipe
+    // the stream and race history, which sometimes left a black empty pane
+    // until the user sent a message. Keep the live conversation; just sync
+    // chrome and ensure the SSE stream is open.
+    if (agent && agent.id && this.agentId === agent.id) {
+      this.currentAgent = agent;
+      if (this.starBtn)     this.starBtn.hidden = false;
+      if (this.settingsBtn) this.settingsBtn.hidden = false;
+      if (this.connectBtn)  this.connectBtn.hidden = false;
+      this.latestTotalTokens = (agent && agent.totalTokens) || this.latestTotalTokens;
+      this._setComposerEnabled(true);
+      this._syncConnectBtn();
+      this._renderTokensPill();
+      this._renderInflightPill();
+      this._syncStarBtn();
+      this._captureAgentCaps(agent);
+      this.renderInfo(agent);
+      // An in-flight history load for this agent already owns the stream
+      // lifecycle (opens SSE in its finally). Don't double-open or race it.
+      if (this._historyLoading) return;
+      if (!this.stream || this.stream.isClosed()) {
+        this.openStreamForCurrent();
+      }
+      // If somehow empty (failed prior load), retry history without a wipe race.
+      if ((!this.turns || this.turns.length === 0) && !this._chatIntroEl) {
+        const agentIdAtCall = agent.id;
+        this.refreshHistory({ force: true })
+          .catch((e: any) => this.showStatus(`history load failed: ${e.message}`, 'warn'))
+          .finally(() => {
+            if (this.agentId !== agentIdAtCall) return;
+            if ((!this.turns || this.turns.length === 0) && !this.activeTurn && !this._chatIntroAbort) {
+              this._playChatIntro();
+            }
+            if (!this.stream || this.stream.isClosed()) this.openStreamForCurrent();
+          });
+      } else {
+        requestAnimationFrame(() => this.scrollToBottom({ force: true }));
+      }
+      return;
+    }
+
     this.closeStream();
     this._cancelChatIntro();
-    this.streamEl.replaceChildren();
+    // Show a loading placeholder instead of a pure black stream while history
+    // fetches. The real content replaces this when refreshHistory finishes.
+    this.streamEl.replaceChildren(
+      el('div', { class: 'chat-empty chat-empty--loading' },
+        el('div', { class: 'chat-empty-headline' }, 'loading conversation…'),
+      ),
+    );
     if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
     this.turns = [];
     this.activeTurn = null;
@@ -1045,13 +1114,15 @@ export class ChatView {
     this.refreshHistory({ force: true })
       .catch((e) => this.showStatus(`history load failed: ${e.message}`, 'warn'))
       .finally(() => {
+        // Stale switch: a newer setAgent won the race — do not open a stream
+        // for the wrong agent or paint the intro over its conversation.
+        if (this.agentId !== agentIdAtCall) return;
         // Only show the intro if the agent we loaded history for is still
         // the active one (the user may have switched mid-load), there are
         // no turns yet (brand new conversation), and no other intro is in
         // flight. We also gate on activeTurn being null so we don't paint
         // the intro on top of an SSE event that raced in.
         if (
-          this.agentId === agentIdAtCall &&
           (!this.turns || this.turns.length === 0) &&
           !this.activeTurn &&
           !this._chatIntroAbort
@@ -1307,6 +1378,9 @@ export class ChatView {
       let lastEventName: string | null = null;
       try {
         for (const ev of events) {
+          // Abort mid-replay if the user switched agents — otherwise we paint
+          // agent A's events into agent B's (now wiped) stream.
+          if (gen !== this._historyGen || this.agentId !== agentId) break;
           const name = ev.event || ev.type || ev.name;
           const data = ev.data || ev.payload || ev;
           if (!name) continue;
@@ -1321,6 +1395,9 @@ export class ChatView {
         this._isReplaying = false;
       }
       this._lastEventTs = null;
+
+      // Superseded by a newer load / agent switch — leave the winner alone.
+      if (gen !== this._historyGen || this.agentId !== agentId) return;
 
       // Finalize thinking only on turns that are truly closed. If history ends
       // mid-prompt (no prompt_complete), KEEP activeTurn open so live SSE
@@ -1350,11 +1427,25 @@ export class ChatView {
       // at the latest message regardless of where the last session ended.
       this._autoScroll = true;
       if (this._jumpToLatestBtn) this._jumpToLatestBtn.hidden = true;
+      // Double rAF: first frame after DOM insert, second after layout/Split
+      // has real heights so content-visibility placeholders don't leave us
+      // scrolled into empty space (looks like a black screen).
       requestAnimationFrame(() => {
         this.scrollToBottom({ force: true });
+        requestAnimationFrame(() => {
+          this.scrollToBottom({ force: true });
+        });
       });
-    } catch (e) {
-      // backend may not implement history yet
+    } catch (e: any) {
+      if (gen === this._historyGen && this.agentId === agentId) {
+        const msg = e && e.message ? e.message : String(e || 'unknown error');
+        this.streamEl.replaceChildren(
+          el('div', { class: 'chat-empty' },
+            el('div', { class: 'chat-empty-headline' }, 'could not load history'),
+            el('div', { class: 'chat-empty-sub' }, msg),
+          ),
+        );
+      }
     } finally {
       if (gen === this._historyGen) this._historyLoading = false;
     }
@@ -1375,6 +1466,10 @@ export class ChatView {
 
   openStreamForCurrent() {
     if (!this.agentId) return;
+    // Always tear down any prior EventSource first — overlapping setAgent
+    // finally-handlers used to leak streams and deliver events into a wiped
+    // turns[] array.
+    this.closeStream();
     this.showStatus('connecting...', 'idle');
     this.stream = openStream(`/api/agents/${encodeURIComponent(this.agentId)}/stream`, {
       onOpen:  () => this.showStatus('connected', 'ok'),
@@ -1507,7 +1602,12 @@ export class ChatView {
         cancelAnimationFrame(this._easedScrollRaf);
         this._easedScrollRaf = 0;
       }
-      if (this._scrollRaf) return;
+      // Re-arm force scroll instead of dropping it when one is already
+      // scheduled (history load + soft re-select both call force scroll).
+      if (this._scrollRaf) {
+        cancelAnimationFrame(this._scrollRaf);
+        this._scrollRaf = 0;
+      }
       this._scrollRaf = requestAnimationFrame(() => {
         this._scrollRaf = 0;
         const doScroll = () => {
