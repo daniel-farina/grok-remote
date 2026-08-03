@@ -1003,13 +1003,10 @@ export class ChatView {
 
     this.closeStream();
     this._cancelChatIntro();
-    // Show a loading placeholder instead of a pure black stream while history
-    // fetches. The real content replaces this when refreshHistory finishes.
-    this.streamEl.replaceChildren(
-      el('div', { class: 'chat-empty chat-empty--loading' },
-        el('div', { class: 'chat-empty-headline' }, 'loading conversation…'),
-      ),
-    );
+    // Invalidate any in-flight history replay so a late response cannot
+    // paint over the empty-home state or a newer agent's stream.
+    this._historyGen++;
+    this._historyLoading = false;
     if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
     this.turns = [];
     this.activeTurn = null;
@@ -1056,7 +1053,8 @@ export class ChatView {
     if (!agent || !agent.id) {
       this.agentId = null;
       this.currentAgent = null;
-      this.streamEl.appendChild(this.empty);
+      // Home / deselect: only the empty state — never the loading placeholder.
+      this.streamEl.replaceChildren(this.empty);
       this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       this.filesPane.replaceChildren();
       if (this.toolsFilesPaneEl && this._toolsColTab === 'files') {
@@ -1074,6 +1072,14 @@ export class ChatView {
       this.closeSettingsDrawer();
       return;
     }
+
+    // Real agent selected: show loading only while history is about to fetch.
+    // (Must come AFTER the null-agent branch so home never shows this.)
+    this.streamEl.replaceChildren(
+      el('div', { class: 'chat-empty chat-empty--loading' },
+        el('div', { class: 'chat-empty-headline' }, 'loading conversation…'),
+      ),
+    );
     if (this.starBtn)     this.starBtn.hidden = false;
     if (this.settingsBtn) this.settingsBtn.hidden = false;
     if (this.connectBtn)  this.connectBtn.hidden = false;
