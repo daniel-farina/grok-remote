@@ -1,5 +1,9 @@
 // Implements fs/read_text_file and fs/write_text_file.
-// Scoped to the agent's working directory so a misbehaving agent can't escape.
+//
+// Relative paths resolve against the agent cwd. Absolute paths are allowed
+// anywhere the process can access — same surface as terminal/* (which is not
+// path-scoped). The old "agent workspace only" gate forced the model to fall
+// back to shell for any real project work outside ~/.grok-remote/agents/.../cwd.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -32,14 +36,6 @@ export interface FsHost {
   writeTextFile(params: WriteTextFileParams): Promise<Record<string, never>>;
 }
 
-function withinScope(scopeDir: string | null | undefined, target: string): boolean {
-  if (!scopeDir) return true;
-  const scope = path.resolve(scopeDir);
-  const resolved = path.resolve(target);
-  // Allow exact scope dir match plus any descendant.
-  return resolved === scope || resolved.startsWith(scope + path.sep);
-}
-
 function rpcError(code: number, message: string): RpcError {
   const err = new Error(message) as RpcError;
   err.rpc = { code, message };
@@ -47,21 +43,18 @@ function rpcError(code: number, message: string): RpcError {
 }
 
 export function createFsHost({ getCwd }: FsHostOptions): FsHost {
-  function resolveAndCheck(p: unknown): string {
+  function resolvePath(p: unknown): string {
     if (typeof p !== 'string' || !p.length) {
       throw rpcError(-32602, 'path must be a non-empty string');
     }
     const scope = getCwd();
-    const abs = path.isAbsolute(p) ? p : path.resolve(scope || process.cwd(), p);
-    if (!withinScope(scope, abs)) {
-      throw rpcError(-32002, `path escapes agent scope: ${p}`);
-    }
+    const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(scope || process.cwd(), p);
     return abs;
   }
 
   return {
     async readTextFile(params: ReadTextFileParams): Promise<ReadTextFileResult> {
-      const target = resolveAndCheck(params?.path);
+      const target = resolvePath(params?.path);
       const content = await fs.readFile(target, 'utf8');
       const limit = params?.limit;
       const line = params?.line;
@@ -75,7 +68,7 @@ export function createFsHost({ getCwd }: FsHostOptions): FsHost {
     },
 
     async writeTextFile(params: WriteTextFileParams): Promise<Record<string, never>> {
-      const target = resolveAndCheck(params?.path);
+      const target = resolvePath(params?.path);
       const content = params?.content;
       if (typeof content !== 'string') {
         throw rpcError(-32602, 'content must be a string');
