@@ -126,6 +126,26 @@ function toggleDrawer(): void {
   else openDrawer();
 }
 
+/** Dismiss the mobile sidebar when tapping outside of it. */
+function installDrawerOutsideClose(): void {
+  // pointerdown (capture) so we beat any stopPropagation on inner nodes and
+  // work on touch where a `click` may not fire after drag-aware pointer handling.
+  document.addEventListener('pointerdown', (ev: PointerEvent) => {
+    if (!document.body.hasAttribute('data-drawer-open')) return;
+    // Only left-button / primary touch.
+    if (ev.button != null && ev.button !== 0) return;
+    const target = ev.target as Element | null;
+    if (!target || typeof target.closest !== 'function') return;
+    // Keep open when interacting with the drawer itself.
+    if (target.closest('.sidebar')) return;
+    // Open controls: let them toggle rather than close-then-reopen.
+    if (target.closest('#hamburger-btn')) return;
+    if (target.closest('#chrome-peek-menu')) return;
+    // Backdrop is an explicit outside target; anything else outside sidebar too.
+    closeDrawer();
+  }, true);
+}
+
 interface RailIconOpts {
   href: string;
   title: string;
@@ -188,8 +208,14 @@ function mountDashboard(): void {
     onSelect: (id: string) => {
       chat.focusConversation();
       navigate(`#/agents/${encodeURIComponent(id)}`);
+      // Mobile drawer: selecting a conversation should dismiss the sidebar
+      // so the chat fills the screen (don't leave users hunting for the ×).
+      closeDrawer();
     },
-    onCreate: () => { chat.focusConversation(); },
+    onCreate: () => {
+      chat.focusConversation();
+      closeDrawer();
+    },
     onDelete: (id: string) => {
       if (currentAgent && currentAgent.id === id) {
         currentAgent = null;
@@ -215,6 +241,24 @@ function mountDashboard(): void {
 
   installOuterSplit(splitHost, sidebarPane, mainPane);
   installToolsToggle();
+  installChromeCollapse();
+
+  // When the user collapses top chrome from Memory / Flow / settings / a
+  // non-conversation chat tab, land on the conversation stream. Collapse
+  // hides the rail + tabs that would otherwise let them leave that view.
+  document.addEventListener('grok-remote:chrome-collapse-focus', () => {
+    const route = parseRoute();
+    if (route.name === 'system' || route.name === 'settings') {
+      const id = currentAgent?.id || sidebar.selectedId;
+      if (id) navigate(`#/agents/${encodeURIComponent(id)}`);
+      else navigate('#/');
+    }
+    // hashchange runs synchronously for location.hash writes; microtask
+    // covers the case where chat was just re-mounted by renderRoute.
+    queueMicrotask(() => {
+      try { chat.focusConversation(); } catch { /* ignore */ }
+    });
+  });
 
   const settingsBtn = document.getElementById('open-settings');
   if (settingsBtn) {
@@ -249,13 +293,11 @@ function mountDashboard(): void {
 
   installBgTracker();
 
-  shell.addEventListener('click', (ev) => {
-    if (!document.body.hasAttribute('data-drawer-open')) return;
-    const target = ev.target as Element | null;
-    if (target && target.closest && target.closest('.sidebar .agent-item')) {
-      closeDrawer();
-    }
-  });
+  // Close the mobile drawer when the user taps outside it. Selection no
+  // longer relies on a bubbling `click` from agent rows (those use pointer
+  // events + drag), so this is the outside-dismiss path; onSelect closes
+  // after a conversation pick.
+  installDrawerOutsideClose();
 
   let activeSettings = false;
 
@@ -281,10 +323,25 @@ function mountDashboard(): void {
       settings.setActive(route.sub);
       return;
     }
-    unmountActiveSystemPage();
-    unmountActiveSettings();
-    mainHost.replaceChildren();
+
+    // Chat (home + per-agent) is a long-lived view. Remounting it on every
+    // sidebar click tore down Split.js, wiped the stream, and raced history
+    // reload — sometimes leaving a black empty pane until the next send.
+    // Stay mounted when switching agents or bouncing home ↔ agent.
+    const wantsChat = route.name === 'chat' || route.name === 'home';
+    const chatAlreadyMounted = wantsChat && mainHost.contains(chat.root);
+
+    if (!chatAlreadyMounted) {
+      unmountActiveSystemPage();
+      unmountActiveSettings();
+      mainHost.replaceChildren();
+    } else {
+      // Still drop non-chat pages if somehow both were active.
+      unmountActiveSystemPage();
+      unmountActiveSettings();
+    }
     updateRailHighlight(route);
+
     if (route.name === 'system') {
       const page = getSystemPage(route.area) as SystemPageRef | null;
       if (page && page.module && typeof page.module.mount === 'function') {
@@ -300,7 +357,7 @@ function mountDashboard(): void {
       return;
     }
     if (route.name === 'chat') {
-      chat.mount(mainHost);
+      if (!chatAlreadyMounted) chat.mount(mainHost);
       const found = sidebar.agents.find((a: Agent) => a.id === route.agentId);
       if (found) {
         currentAgent = found;
@@ -308,19 +365,28 @@ function mountDashboard(): void {
         sidebar.renderList();
         chat.setAgent(found);
       } else {
-        api.getAgent(route.agentId).then((a: unknown) => {
-          currentAgent = (a as Agent | null) || { id: route.agentId };
+        // Stale route while list still loading: fetch the record, but only
+        // apply it if the user hasn't navigated away mid-flight.
+        const wantId = route.agentId;
+        api.getAgent(wantId).then((a: unknown) => {
+          if (parseRoute().name !== 'chat') return;
+          const r = parseRoute();
+          if (r.name !== 'chat' || r.agentId !== wantId) return;
+          currentAgent = (a as Agent | null) || { id: wantId };
           sidebar.selectedId = currentAgent.id;
           sidebar.renderList();
           chat.setAgent(currentAgent);
         }).catch(() => {
-          currentAgent = { id: route.agentId };
+          if (parseRoute().name !== 'chat') return;
+          const r = parseRoute();
+          if (r.name !== 'chat' || r.agentId !== wantId) return;
+          currentAgent = { id: wantId };
           chat.setAgent(currentAgent);
         });
       }
       return;
     }
-    chat.mount(mainHost);
+    if (!chatAlreadyMounted) chat.mount(mainHost);
     chat.setAgent(null);
   }
 
@@ -354,7 +420,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   const backdrop = document.getElementById('drawer-backdrop');
   if (backdrop) {
-    backdrop.addEventListener('click', () => closeDrawer());
+    // pointerdown + click: covers desktop and sticky mobile taps.
+    const dismiss = (ev: Event) => {
+      ev.preventDefault();
+      closeDrawer();
+    };
+    backdrop.addEventListener('pointerdown', dismiss);
+    backdrop.addEventListener('click', dismiss);
   }
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && document.body.hasAttribute('data-drawer-open')) {
@@ -397,10 +469,8 @@ function isSidebarCollapsed(): boolean {
 function installToolsToggle(): void {
   const btn = document.getElementById('topbar-sidebar-right') as HTMLElement | null;
   if (!btn) return;
-  if (isMobileViewport()) {
-    btn.hidden = true;
-    return;
-  }
+  // Shown on mobile too — toggles the stacked tool-calls pane (collapse /
+  // expand). Previously hidden, which left no way to free chat space.
   btn.hidden = false;
   let collapsed = false;
   function paint(): void {
@@ -417,6 +487,116 @@ function installToolsToggle(): void {
     const ce = ev as CustomEvent<{ collapsed?: boolean }>;
     collapsed = !!(ce && ce.detail && ce.detail.collapsed);
     paint();
+  });
+}
+
+
+const CHROME_COLLAPSED_KEY = 'grok-remote.chrome.collapsed';
+
+function isChromeCollapsed(): boolean {
+  try {
+    const raw = localStorage.getItem(CHROME_COLLAPSED_KEY);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+  } catch { /* ignore */ }
+  // First visit: on phones, start collapsed so the conversation owns the screen.
+  return isMobileViewport();
+}
+
+function setChromeCollapsed(collapsed: boolean, opts: { focusChat?: boolean } = {}): void {
+  try { localStorage.setItem(CHROME_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { /* ignore */ }
+  if (collapsed) document.body.setAttribute('data-chrome-collapsed', '');
+  else document.body.removeAttribute('data-chrome-collapsed');
+  const peek = document.getElementById('chrome-peek') as HTMLElement | null;
+  if (peek) peek.hidden = !collapsed;
+  paintChromeToggleButtons(collapsed);
+  // Collapsing hides the left-rail + chat tabs, so any non-conversation view
+  // (Memory / Flow tab / settings / …) would otherwise stay on screen with no
+  // way to leave it until the user expands chrome again. Snap back to the
+  // conversation stream so hide/show is route-agnostic, not owned by the
+  // first rail item / Conversation tab.
+  if (collapsed && opts.focusChat) {
+    document.dispatchEvent(new CustomEvent('grok-remote:chrome-collapse-focus'));
+  }
+}
+
+function paintChromeToggleButtons(collapsed: boolean): void {
+  const topbarBtn = document.getElementById('topbar-chrome-toggle') as HTMLElement | null;
+  if (topbarBtn) {
+    topbarBtn.innerHTML = iconHtml('chevrons-up');
+    topbarBtn.title = 'hide top chrome (more room for chat)';
+    topbarBtn.setAttribute('aria-label', topbarBtn.title);
+    topbarBtn.hidden = collapsed;
+  }
+  const expandIco = document.querySelector('#chrome-peek-expand .chrome-peek__expand-ico') as HTMLElement | null;
+  if (expandIco) expandIco.innerHTML = iconHtml('chevrons-down');
+  // Mirror tools-panel icon into the peek strip.
+  const peekTools = document.getElementById('chrome-peek-tools') as HTMLElement | null;
+  const topbarTools = document.getElementById('topbar-sidebar-right') as HTMLElement | null;
+  if (peekTools && topbarTools) {
+    peekTools.innerHTML = topbarTools.innerHTML;
+    peekTools.title = topbarTools.title || 'toggle tool calls panel';
+    peekTools.setAttribute('aria-label', peekTools.title);
+  }
+  // Notify chat tabs control (if mounted) so its label matches.
+  document.dispatchEvent(new CustomEvent('grok-remote:chrome-state', {
+    detail: { collapsed },
+  }));
+}
+
+function installChromeCollapse(): void {
+  const topbarBtn = document.getElementById('topbar-chrome-toggle') as HTMLElement | null;
+  const peekExpand = document.getElementById('chrome-peek-expand') as HTMLElement | null;
+  const peekMenu = document.getElementById('chrome-peek-menu') as HTMLElement | null;
+  const peekTools = document.getElementById('chrome-peek-tools') as HTMLElement | null;
+
+  // User-initiated collapse focuses chat; restoring a saved preference does not
+  // (deep links / refresh should keep the current route).
+  const apply = (collapsed: boolean, opts: { focusChat?: boolean } = {}) =>
+    setChromeCollapsed(collapsed, opts);
+
+  // Restore persisted preference.
+  apply(isChromeCollapsed());
+
+  if (topbarBtn) {
+    topbarBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      apply(true, { focusChat: true });
+    });
+  }
+  if (peekExpand) {
+    peekExpand.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      apply(false);
+    });
+  }
+  if (peekMenu) {
+    peekMenu.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      toggleDrawer();
+    });
+  }
+  if (peekTools) {
+    peekTools.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      document.dispatchEvent(new CustomEvent('grok-remote:tools-toggle'));
+    });
+  }
+  // External toggles (chat tabs control) use this event.
+  document.addEventListener('grok-remote:chrome-toggle', () => {
+    const next = !isChromeCollapsed();
+    apply(next, { focusChat: next });
+  });
+  document.addEventListener('grok-remote:chrome-set', (ev: Event) => {
+    const ce = ev as CustomEvent<{ collapsed?: boolean }>;
+    if (ce && ce.detail && typeof ce.detail.collapsed === 'boolean') {
+      apply(ce.detail.collapsed, { focusChat: ce.detail.collapsed });
+    }
+  });
+  // Keep peek tools icon in sync when tools panel state changes.
+  document.addEventListener('grok-remote:tools-state', () => {
+    // Defer so installToolsToggle paints the topbar button first.
+    requestAnimationFrame(() => paintChromeToggleButtons(isChromeCollapsed()));
   });
 }
 

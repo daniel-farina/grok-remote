@@ -6,13 +6,11 @@ import os from 'node:os';
 
 import { createFsHost } from '../lib/fs-host.js';
 
-// Build a fresh tmpdir scope per test so they don't leak into each other or
-// the user's home directory.
 function newScope(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'grok-remote-fshost-'));
 }
 
-test('readTextFile reads a file inside the scope', async () => {
+test('readTextFile reads a file inside the agent cwd (relative path)', async () => {
   const scope = newScope();
   fs.writeFileSync(path.join(scope, 'a.txt'), 'hello\nworld\n');
   const host = createFsHost({ getCwd: () => scope });
@@ -24,27 +22,39 @@ test('readTextFile honours line + limit by slicing the file by line', async () =
   const scope = newScope();
   fs.writeFileSync(path.join(scope, 'lines.txt'), '1\n2\n3\n4\n5\n');
   const host = createFsHost({ getCwd: () => scope });
-  // line: 1-indexed, limit: count.
   const out = await host.readTextFile({ path: 'lines.txt', line: 2, limit: 2 });
   assert.equal(out.content, '2\n3');
 });
 
-test('readTextFile rejects a path that escapes the scope', async () => {
+test('readTextFile accepts an absolute path outside the agent cwd', async () => {
+  // Mirrors shell access: absolute paths are not fenced to the agent workspace.
   const scope = newScope();
+  const outside = newScope();
+  const file = path.join(outside, 'elsewhere.txt');
+  fs.writeFileSync(file, 'outside-ok');
   const host = createFsHost({ getCwd: () => scope });
-  await assert.rejects(
-    host.readTextFile({ path: '../../../etc/passwd' }),
-    /path escapes agent scope/,
-  );
+  const out = await host.readTextFile({ path: file });
+  assert.equal(out.content, 'outside-ok');
 });
 
-test('readTextFile rejects an absolute path outside the scope', async () => {
+test('writeTextFile accepts an absolute path outside the agent cwd', async () => {
   const scope = newScope();
+  const outside = newScope();
+  const file = path.join(outside, 'written.txt');
   const host = createFsHost({ getCwd: () => scope });
-  await assert.rejects(
-    host.readTextFile({ path: '/etc/passwd' }),
-    /path escapes agent scope/,
-  );
+  await host.writeTextFile({ path: file, content: 'via-abs' });
+  assert.equal(fs.readFileSync(file, 'utf8'), 'via-abs');
+});
+
+test('writeTextFile can reach a sibling dir via relative .. path', async () => {
+  const parent = newScope();
+  const scope = path.join(parent, 'agent');
+  const sibling = path.join(parent, 'project');
+  fs.mkdirSync(scope);
+  fs.mkdirSync(sibling);
+  const host = createFsHost({ getCwd: () => scope });
+  await host.writeTextFile({ path: '../project/out.txt', content: 'escaped-ok' });
+  assert.equal(fs.readFileSync(path.join(sibling, 'out.txt'), 'utf8'), 'escaped-ok');
 });
 
 test('readTextFile rejects a non-string or empty path with -32602', async () => {
@@ -73,33 +83,11 @@ test('writeTextFile rejects when content is not a string', async () => {
   );
 });
 
-test('writeTextFile refuses to write outside the scope', async () => {
-  const scope = newScope();
-  const host = createFsHost({ getCwd: () => scope });
-  await assert.rejects(
-    host.writeTextFile({ path: '../escape.txt', content: 'leak' }),
-    /path escapes agent scope/,
-  );
-});
-
-test('allows the exact scope directory itself, not just descendants', async () => {
-  // A path that resolves to the scope root (e.g. ".") should not be flagged
-  // as an escape even though it's not strictly a descendant.
-  const scope = newScope();
-  const host = createFsHost({ getCwd: () => scope });
-  await assert.rejects(
-    host.readTextFile({ path: '.' }),
-    /EISDIR|illegal operation on a directory/i, // fails for being a directory, not for scope
-  );
-});
-
 test('falls back to process.cwd() resolution when getCwd returns null', async () => {
-  // When getCwd is null, no scope check is performed. Verify that relative
-  // paths still resolve via process.cwd() and reads succeed.
   const scope = newScope();
   const file = path.join(scope, 'cwd-fallback.txt');
   fs.writeFileSync(file, 'data');
   const host = createFsHost({ getCwd: () => null });
-  const out = await host.readTextFile({ path: file }); // absolute path bypasses cwd
+  const out = await host.readTextFile({ path: file });
   assert.equal(out.content, 'data');
 });

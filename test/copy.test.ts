@@ -62,6 +62,28 @@ test('serializeConversation emits You/Grok sections per turn', () => {
   assert.match(out, /## Grok\nhi back/);
 });
 
+test('serializeConversation includes every assistants[] segment in a tool-heavy turn', () => {
+  // Long turns stream interim status bubbles between tool batches; copy
+  // must not collapse them into a single bubble / drop earlier ones.
+  const turns: ConvoTurn[] = [
+    {
+      userText: 'fix it',
+      assistants: [
+        { text: 'Looking at the layout…' },
+        { text: 'Patching the CSS…' },
+        { text: '### Done\nOffset the drawer under chrome-peek.' },
+      ],
+      assistant: { text: '### Done\nOffset the drawer under chrome-peek.' },
+    },
+  ];
+  const out = serializeConversation(turns, { agent: { name: 'a' } });
+  assert.match(out, /Looking at the layout/);
+  assert.match(out, /Patching the CSS/);
+  assert.match(out, /Offset the drawer under chrome-peek/);
+  // Three distinct Grok sections, not one concatenated blob.
+  assert.equal((out.match(/## Grok/g) || []).length, 3);
+});
+
 test('serializeConversation handles bubble.text as a function', () => {
   const turns: ConvoTurn[] = [
     {

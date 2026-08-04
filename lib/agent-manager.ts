@@ -62,6 +62,8 @@ interface AgentRecord extends AgentMeta {
   inFlight?: number;
   _inFlightIds?: Set<string>;
   _lastTokenEmit?: number;
+  /** Upstream ACP `_meta.eventId` values already written to history / SSE. */
+  _seenUpstreamEventIds?: Set<string>;
 }
 
 export interface AgentSpawnOptions {
@@ -125,6 +127,29 @@ export function countRunningBg(record: AgentRecord | null | undefined): number {
   let n = 0;
   for (const v of record.bgTasks.values()) if (!v.completed) n++;
   return n;
+}
+
+/**
+ * Seed the set of already-seen upstream ACP event ids from disk history.
+ * On session resume Grok re-emits prior session/update events with the same
+ * `_meta.eventId`; without this seed we would re-append them to history and
+ * re-broadcast them over SSE (which the chat UI then concatenates into one
+ * ever-growing assistant bubble).
+ */
+function loadSeenUpstreamEventIds(agentId: string): Set<string> {
+  const out = new Set<string>();
+  let raw: string;
+  try { raw = fs.readFileSync(historyPath(agentId), 'utf8'); }
+  catch { return out; }
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.indexOf('eventId') === -1) continue;
+    let ev: { data?: { _meta?: { eventId?: unknown } } };
+    try { ev = JSON.parse(trimmed); } catch { continue; }
+    const eid = ev?.data?._meta?.eventId;
+    if (eid != null && eid !== '') out.add(String(eid));
+  }
+  return out;
 }
 
 function hydrateBgTasksFromHistory(agentId: string): Map<string, BgTask> {
@@ -309,6 +334,7 @@ export class AgentManager extends EventEmitter {
         eventCounter: 0,
       };
       record.bgTasks = hydrateBgTasksFromHistory(record.id);
+      record._seenUpstreamEventIds = loadSeenUpstreamEventIds(record.id);
       this.agents.set(record.id, record);
     }
   }
@@ -409,6 +435,20 @@ export class AgentManager extends EventEmitter {
 
   private _emitEventFactory(record: AgentRecord): (event: string, data: Record<string, unknown>) => void {
     return (event: string, data: Record<string, unknown>): void => {
+      // Drop session-resume replays: Grok re-sends historical session/update
+      // notifications with a stable `_meta.eventId`. Appending them again makes
+      // history (and the live chat bubble) grow by concatenating every prior
+      // assistant reply into the latest message.
+      const meta = data && (data['_meta'] as { eventId?: unknown } | null | undefined);
+      const upstreamId = meta && meta.eventId != null && meta.eventId !== ''
+        ? String(meta.eventId)
+        : null;
+      if (upstreamId) {
+        if (!record._seenUpstreamEventIds) record._seenUpstreamEventIds = new Set();
+        if (record._seenUpstreamEventIds.has(upstreamId)) return;
+        record._seenUpstreamEventIds.add(upstreamId);
+      }
+
       record.eventCounter = (record.eventCounter || 0) + 1;
       const eventId = `${Date.now()}-${record.eventCounter}`;
       const wrapped: AgentRingEntry = { id: eventId, event, data: { ...data, _t: Date.now() } };
@@ -594,6 +634,7 @@ export class AgentManager extends EventEmitter {
       ring,
       status: 'starting',
       eventCounter: 0,
+      _seenUpstreamEventIds: new Set(),
     };
     this.agents.set(id, record);
     writeMeta(record);
@@ -606,8 +647,25 @@ export class AgentManager extends EventEmitter {
     return pub;
   }
 
+  /**
+   * Merge disk history's upstream event ids into the live set before a
+   * session resume can re-emit them. Connect/reconnect is exactly when
+   * Grok dumps prior agent_message_chunk events with stable _meta.eventId.
+   */
+  private _refreshSeenUpstreamIds(record: AgentRecord): void {
+    const fromDisk = loadSeenUpstreamEventIds(record.id);
+    if (!record._seenUpstreamEventIds) {
+      record._seenUpstreamEventIds = fromDisk;
+      return;
+    }
+    for (const id of fromDisk) record._seenUpstreamEventIds.add(id);
+  }
+
   private _connectRecord(record: AgentRecord): AcpClient {
     if (record.client) return record.client;
+    // Must run before client.start(resumeSessionId) — resume immediately
+    // re-streams historical session/update notifications.
+    this._refreshSeenUpstreamIds(record);
     record.status = 'starting';
     const client = new AcpClient({
       cwd: record.cwd,

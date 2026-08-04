@@ -32,6 +32,10 @@ html, body {
      sidebar stay put regardless of conversation length.
      100dvh respects iOS Safari's collapsing URL bar so we never end up
      with a chunk of layout hidden behind the bottom toolbar. */
+  /* Lock to viewport. Only the chat-stream scrolls; the composer and the
+     sidebar stay put regardless of conversation length.
+     100dvh respects iOS Safari's collapsing URL bar so we never end up
+     with a chunk of layout hidden behind the bottom toolbar. */
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -198,6 +202,143 @@ body::before {
   color: var(--teal);
   border-color: var(--border-2);
   background: var(--panel);
+}
+
+/* ── chrome collapse (more room for conversation) ─────── */
+/* Hides the heavy top chrome (app topbar, left rail, chat tabs) so the
+   message stream can use the full mobile viewport. Restored via the slim
+   .chrome-peek strip. Preference is persisted in localStorage. */
+.chrome-peek {
+  position: relative;
+  z-index: 3;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  padding-top: calc(6px + env(safe-area-inset-top));
+  padding-left: calc(10px + env(safe-area-inset-left));
+  padding-right: calc(10px + env(safe-area-inset-right));
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+  flex-shrink: 0;
+}
+.chrome-peek[hidden] { display: none !important; }
+body[data-chrome-collapsed] .chrome-peek {
+  display: flex;
+}
+body[data-chrome-collapsed] .chrome-peek[hidden] {
+  display: flex !important;
+}
+body[data-chrome-collapsed] .topbar {
+  display: none;
+}
+body[data-chrome-collapsed] .left-rail {
+  display: none;
+}
+body[data-chrome-collapsed] .chat > .tabs {
+  display: none;
+}
+body[data-chrome-collapsed] .dashboard {
+  border-top: none;
+}
+
+/* Height of the chrome-peek content box (padding + 36px controls + border),
+   excluding safe-area. Safe-area is added at the drawer offset use site.
+   Defined on :root/:body so the fixed drawer (outside .chrome-peek) can read it. */
+:root {
+  --chrome-peek-body-height: 49px; /* 6 + 36 + 6 + 1 */
+}
+@media (max-width: 720px) {
+  :root {
+    --chrome-peek-body-height: 45px; /* 4 + 36 + 4 + 1 */
+  }
+}
+.chrome-peek__btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+.chrome-peek__btn:hover {
+  color: var(--teal);
+  border-color: var(--border-2);
+}
+.chrome-peek__btn svg {
+  width: 18px;
+  height: 18px;
+}
+/* Mini hamburger (3 bars) for the peek menu button. */
+.chrome-peek__menu {
+  display: none; /* mobile-only; desktop keeps the permanent sidebar */
+  flex-direction: column;
+  gap: 3px;
+}
+@media (max-width: 720px) {
+  .chrome-peek__menu { display: inline-flex; }
+}
+.chrome-peek__menu span {
+  display: block;
+  width: 14px;
+  height: 1.5px;
+  background: currentColor;
+  border-radius: 1px;
+}
+.chrome-peek__expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  min-height: 36px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.chrome-peek__expand:hover {
+  color: var(--teal);
+  border-color: rgba(94, 234, 212, 0.45);
+  background: rgba(94, 234, 212, 0.06);
+}
+.chrome-peek__expand-ico {
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+}
+.chrome-peek__expand-ico svg {
+  width: 16px;
+  height: 16px;
+}
+.chrome-peek__expand-lbl {
+  letter-spacing: 0.02em;
+}
+.chrome-peek__spacer { flex: 1; }
+
+/* Icon-only collapse control in the chat tabs action group. */
+.tab-action--chrome {
+  /* inherits .tab-action / group styles */
+}
+.tab-action--chrome .tab-action-ico {
+  display: inline-flex;
+  line-height: 0;
+}
+.tab-action--chrome .tab-action-ico svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* ── intro animation (chat-stream welcome moment) ───────── */
@@ -1390,12 +1531,32 @@ body::before {
   .chat-split > .chat-stream {
     flex: 1 1 auto !important;
     min-width: 0;
+    min-height: 0;
   }
   .chat-tools-col {
     flex: 0 0 auto !important;
     border-left: none;
     border-top: 1px solid var(--border);
     max-height: 40vh;
+  }
+  /* Collapsed tools pane: reclaim full height for the conversation.
+     Matches desktop .chat-split--tools-collapsed rules; reinforced here
+     so the stacked mobile flex layout doesn't keep a residual strip. */
+  .chat-split--tools-collapsed > .chat-tools-col {
+    display: none !important;
+  }
+  .chat-split--tools-collapsed > .chat-stream {
+    flex: 1 1 auto !important;
+    max-height: none;
+  }
+  /* Fullscreen tools would hide .chat-stream entirely — never allow on mobile. */
+  .chat-split--tools-fullscreen > .chat-stream {
+    display: flex !important;
+  }
+  .chat-split--tools-fullscreen > .chat-tools-col {
+    flex: 0 0 auto !important;
+    max-height: 40vh;
+    width: auto !important;
   }
 }
 
@@ -1883,6 +2044,13 @@ body::before {
   contain: layout style;
 }
 .composer-input:focus { border-color: var(--teal); }
+/* Placeholder must read clearly as non-content: dimmer than --muted body text. */
+.composer-input::placeholder {
+  color: var(--dim);
+  opacity: 1; /* Firefox defaults to ~0.54 on top of color; keep one source of truth */
+}
+.composer-input::-webkit-input-placeholder { color: var(--dim); }
+.composer-input::-moz-placeholder { color: var(--dim); opacity: 1; }
 .composer-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -2930,9 +3098,18 @@ body::before {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  z-index: 30;
+  /* Above main chat chrome, below the off-canvas sidebar (z-index 40). */
+  z-index: 35;
+  /* Ensure taps hit the backdrop even if a parent stacking quirk intervenes. */
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
 }
-.drawer-backdrop[hidden] { display: none; }
+.drawer-backdrop[hidden] { display: none !important; }
+body[data-drawer-open] .drawer-backdrop {
+  display: block;
+}
 
 /* install banner (palette-matched, top on desktop). */
 /* Install banner: an honest alert, not a chip blended into the chrome.
@@ -3043,7 +3220,7 @@ body::before {
     /* well above .drawer-backdrop (z-index 30) and the install banner */
     z-index: 40;
     transform: translateX(-100%);
-    transition: transform 0.22s ease;
+    transition: transform 0.22s ease, top 0.22s ease;
     border-right: 1px solid var(--border);
     border-bottom: none;
     max-height: none;
@@ -3055,7 +3232,22 @@ body::before {
     box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
   }
   body[data-drawer-open] .sidebar { transform: translateX(0); }
-  body:not([data-drawer-open]) .drawer-backdrop { display: none; }
+  body:not([data-drawer-open]) .drawer-backdrop { display: none !important; }
+  body[data-drawer-open] .drawer-backdrop { display: block !important; }
+
+  /* Chrome-peek lives outside .app with a higher stacking order than the
+     whole app tree. Without an offset it paints over the drawer head and
+     hides "+ new" / the top of the conversation list. Sit the drawer and
+     its backdrop just below the peek strip so the panel stays usable and
+     a strip of the active conversation remains visible above the dimmer. */
+  body[data-chrome-collapsed] .sidebar {
+    top: calc(var(--chrome-peek-body-height, 45px) + env(safe-area-inset-top, 0px));
+    /* safe-area is already accounted for in `top` */
+    padding-top: 12px;
+  }
+  body[data-chrome-collapsed] .drawer-backdrop {
+    top: calc(var(--chrome-peek-body-height, 45px) + env(safe-area-inset-top, 0px));
+  }
 
   .main-pane { width: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
@@ -3085,6 +3277,10 @@ body::before {
      Save horizontal space for the hamburger + status pill. */
   .brand-name,
   .brand-version { display: none; }
+
+  /* Chrome-peek strip: slightly denser on phones. */
+  .chrome-peek { padding: 4px 8px; padding-top: calc(4px + env(safe-area-inset-top)); }
+  .chrome-peek__expand { font-size: 11px; padding: 5px 10px; }
 
   /* Show the close-drawer button on mobile. */
   .sidebar-close { display: inline-block; }
@@ -4292,7 +4488,9 @@ body::before {
 .topbar-panel-btn:active,
 .topbar-icon-btn:active { transform: scale(0.92); }
 @media (max-width: 720px) {
-  .topbar-panel-btn { display: none !important; }
+  /* Left sidebar uses the hamburger drawer on mobile; keep the right
+     tools-panel toggle visible so users can reclaim chat space. */
+  .topbar-panel-btn--left { display: none !important; }
 }
 .left-rail {
   background: var(--bg);

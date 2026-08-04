@@ -56,7 +56,10 @@ export interface ConvoTurn {
   user?: HTMLElement | { querySelector?: (sel: string) => Element | null; textContent?: string | null } | null;
   thinking?: ConvoBubble | null;
   tools?: ConvoToolEntry[] | null;
+  /** Current / last open assistant bubble (legacy single-bubble field). */
   assistant?: ConvoBubble | null;
+  /** All assistant segments this turn (interim status lines + final reply). */
+  assistants?: ConvoBubble[] | null;
 }
 
 export interface ConvoAgent {
@@ -175,8 +178,14 @@ export function serializeConversation(turns: ConvoTurn[] | null | undefined, ctx
       }
     }
 
-    const assistant = bubbleText(turn.assistant).trim();
-    if (assistant) {
+    // Prefer the full assistants[] list so intermediate status bubbles
+    // between tool batches are not dropped when copying.
+    const bubbles: ConvoBubble[] = Array.isArray(turn.assistants) && turn.assistants.length
+      ? turn.assistants
+      : (turn.assistant ? [turn.assistant] : []);
+    for (const bubble of bubbles) {
+      const assistant = bubbleText(bubble).trim();
+      if (!assistant) continue;
       lines.push('## Grok');
       lines.push(assistant);
       lines.push('');

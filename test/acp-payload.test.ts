@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { unwrap, extractText } from '../src/lib/acp-payload.js';
+import { unwrap, extractText, upstreamEventId } from '../src/lib/acp-payload.js';
 
 test('unwrap returns the inner .update object when present', () => {
   const inner = { sessionUpdate: 'tool_call', toolCallId: 't1' };
@@ -61,4 +61,25 @@ test('extractText returns null for non-string non-object input', () => {
 test('extractText returns null when no text field is present anywhere', () => {
   assert.equal(extractText({ kind: 'tool_call', toolCallId: 't1' }), null);
   assert.equal(extractText({ content: { kind: 'image' } }), null);
+});
+
+test('upstreamEventId reads _meta.eventId from the SSE envelope', () => {
+  assert.equal(
+    upstreamEventId({
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hi' } },
+      _meta: { eventId: 'abc-123', chunkId: 4 },
+    }),
+    'abc-123',
+  );
+});
+
+test('upstreamEventId returns null when _meta is missing or empty', () => {
+  assert.equal(upstreamEventId(null), null);
+  assert.equal(upstreamEventId({ update: { sessionUpdate: 'agent_message_chunk' } }), null);
+  assert.equal(upstreamEventId({ _meta: {} }), null);
+  assert.equal(upstreamEventId({ _meta: { eventId: '' } }), null);
+});
+
+test('upstreamEventId stringifies non-string eventIds', () => {
+  assert.equal(upstreamEventId({ _meta: { eventId: 42 } }), '42');
 });

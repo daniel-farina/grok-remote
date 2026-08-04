@@ -39,10 +39,24 @@
           <span class="theme-toggle-dot" id="theme-toggle-dot" aria-hidden="true"></span>
           <span class="theme-toggle-label" id="theme-toggle-label">dark</span>
         </button>
+        <button class="topbar-icon-btn" id="topbar-chrome-toggle" type="button" title="hide top chrome" aria-label="hide top chrome"></button>
         <button class="topbar-icon-btn" id="open-settings" title="settings" aria-label="settings"></button>
         <button class="topbar-panel-btn topbar-panel-btn--right" id="topbar-sidebar-right" type="button" title="toggle tool calls panel" aria-label="toggle tool calls panel" hidden></button>
       </div>
     </header>
+
+    <!-- Slim strip shown only when chrome is collapsed (more room for chat). -->
+    <div class="chrome-peek" id="chrome-peek" hidden>
+      <button class="chrome-peek__btn chrome-peek__menu" id="chrome-peek-menu" type="button" title="open conversations" aria-label="open conversations">
+        <span></span><span></span><span></span>
+      </button>
+      <button class="chrome-peek__expand" id="chrome-peek-expand" type="button" title="show top chrome" aria-label="show top chrome">
+        <span class="chrome-peek__expand-ico" aria-hidden="true"></span>
+        <span class="chrome-peek__expand-lbl">show UI</span>
+      </button>
+      <span class="chrome-peek__spacer"></span>
+      <button class="chrome-peek__btn" id="chrome-peek-tools" type="button" title="toggle tool calls panel" aria-label="toggle tool calls panel"></button>
+    </div>
 
     <main id="app" class="app">
       <!-- Backdrop lives INSIDE .app on purpose: .app creates a stacking

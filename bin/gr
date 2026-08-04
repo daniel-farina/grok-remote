@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --import tsx
 // gr - grok-remote CLI shortcut.
 //
 // Smart default (no args): make sure the server is healthy, show the dashboard

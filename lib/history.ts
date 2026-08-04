@@ -37,3 +37,40 @@ export function readAll(agentId: string): string {
     return '';
   }
 }
+
+/**
+ * Drop session-resume duplicates from a history.jsonl body.
+ *
+ * On reconnect, Grok re-emits prior session/update events with the same
+ * `_meta.eventId`. Those used to be appended again, so reloading a
+ * conversation re-painted every past assistant reply into the latest
+ * bubble. First occurrence wins; lines without an upstream id always pass.
+ */
+export function dedupeHistoryByUpstreamEventId(raw: string): string {
+  if (!raw) return '';
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    if (line.indexOf('eventId') === -1) {
+      out.push(line);
+      continue;
+    }
+    let eid: unknown;
+    try {
+      const ev = JSON.parse(line) as { data?: { _meta?: { eventId?: unknown } } };
+      eid = ev?.data?._meta?.eventId;
+    } catch {
+      out.push(line);
+      continue;
+    }
+    if (eid != null && eid !== '') {
+      const key = String(eid);
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    out.push(line);
+  }
+  // Preserve trailing newline when the input had content (NDJSON convention).
+  return out.length ? out.join('\n') + '\n' : '';
+}

@@ -52,3 +52,24 @@ export function extractText(payload: unknown): string | null {
   if (typeof p.text === 'string') return p.text;
   return null;
 }
+
+/**
+ * Stable id for an ACP session/update as assigned by the Grok agent.
+ *
+ * On session resume the agent re-emits prior thought/message/tool events with
+ * the *same* `_meta.eventId`. Our local SSE id is always new, so callers that
+ * want to ignore historical replays must key off this upstream id.
+ *
+ * Accepts both the live SSE envelope `{ update, _meta }` and a bare update
+ * (no id available → null).
+ */
+export function upstreamEventId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const p = payload as { _meta?: unknown; update?: unknown };
+  const meta = p._meta;
+  if (meta && typeof meta === 'object') {
+    const eid = (meta as { eventId?: unknown }).eventId;
+    if (eid != null && eid !== '') return String(eid);
+  }
+  return null;
+}
