@@ -371,6 +371,10 @@ grok-remote/
 
 ---
 
+## See also
+
+[**Build Remote Agent**](https://grokbuildremote.com/) is the HTTPS/store unified control layer for Grok Build — [iOS](https://apps.apple.com/app/id6791293726), [Google Play](https://play.google.com/store/apps/details?id=com.grokbuildremote.app), [site](https://grokbuildremote.com/); MIT desktop agent [v0.6.0](https://github.com/LinespottingOrg/GrokBuildRemote-Agents/releases/tag/v0.6.0). It coexists with LAN remotes (`:2421`), Tailscale dashboards (`:7910`), and hubs (`:8787`). Independent product by Linespotting AB, not affiliated with xAI.
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
