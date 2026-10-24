@@ -128,3 +128,50 @@ test('error and compacted segments', () => {
   const { model } = run([user('hi'), ['error', { message: 'boom' }], ['session_summary_generated', { summary: 's' }]]);
   assert.deepEqual(types(lastTurn(model).segments), ['user', 'error', 'compacted']);
 });
+
+// ── Task 2: run summary and captions ──────────────────────────────────
+import { summarizeRun, runCaption, thoughtPreview, runIsActive, runFailedCount, type RunItem, type ToolStatus } from '../src/lib/thread-model.js';
+
+const T = (kind: string, status: ToolStatus = 'Completed'): RunItem =>
+  ({ type: 'tool', toolCallId: Math.random().toString(36), kind, title: kind, status });
+const TH = (text: string): RunItem => ({ type: 'thought', id: Math.random().toString(36), text });
+
+test('summarizeRun counts commands and files', () => {
+  assert.equal(summarizeRun([T('execute'), T('execute'), T('read')]), 'Ran 2 commands, read 1 file');
+});
+
+test('summarizeRun orders kinds by first appearance and counts thoughts', () => {
+  assert.equal(summarizeRun([T('read'), T('execute'), TH('a'), TH('b')]), 'Read 1 file, ran 1 command · 2 thoughts');
+});
+
+test('summarizeRun reports failures', () => {
+  assert.equal(summarizeRun([T('execute', 'Failed'), T('execute')]), 'Ran 2 commands · 1 failed');
+});
+
+test('summarizeRun falls back to tools for other kinds', () => {
+  assert.equal(summarizeRun([T('other'), T('think')]), 'Used 2 tools');
+});
+
+test('summarizeRun with only a thought', () => {
+  assert.equal(summarizeRun([TH('x')]), '1 thought');
+});
+
+test('runCaption is the first line of the latest thought', () => {
+  assert.equal(runCaption([TH('a'), T('execute'), TH('b\nmore')]), 'b');
+  const long = runCaption([TH('y'.repeat(200))])!;
+  assert.equal(long.length, 121);
+  assert.ok(long.endsWith('…'));
+  assert.equal(runCaption([T('execute')]), null);
+});
+
+test('thoughtPreview truncates to 100 chars plus ellipsis', () => {
+  const p = thoughtPreview('x'.repeat(150));
+  assert.equal(p.length, 101);
+  assert.ok(p.endsWith('…'));
+});
+
+test('runIsActive tracks pending and running tools', () => {
+  assert.equal(runIsActive([T('execute', 'Running')]), true);
+  assert.equal(runIsActive([T('execute', 'Completed'), T('read', 'Failed')]), false);
+  assert.equal(runFailedCount([T('execute', 'Failed'), T('read', 'Failed'), T('read')]), 2);
+});

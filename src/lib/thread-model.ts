@@ -335,3 +335,67 @@ export class ThreadModel {
     this.add(turn, { id: this.nextId(), type, text }, ch);
   }
 }
+
+// ── run summary helpers ────────────────────────────────────────────────
+
+const KIND_WORDING: Record<string, [string, string, string]> = {
+  // kind: [verb, singular noun, plural noun]
+  execute: ['ran', 'command', 'commands'],
+  read:    ['read', 'file', 'files'],
+  edit:    ['edited', 'file', 'files'],
+  delete:  ['deleted', 'file', 'files'],
+  move:    ['moved', 'file', 'files'],
+  search:  ['ran', 'search', 'searches'],
+  fetch:   ['fetched', 'URL', 'URLs'],
+};
+const OTHER_WORDING: [string, string, string] = ['used', 'tool', 'tools'];
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+const capitalise = (s: string): string => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
+
+function clip(text: string, max: number): string {
+  const first = text.split('\n').find((l) => l.trim()) || '';
+  const line = first.trim();
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+
+/** Collapsed one-line summary, e.g. "Ran 2 commands, read 1 file · 3 thoughts · 1 failed". */
+export function summarizeRun(items: RunItem[]): string {
+  const counts = new Map<string, number>();
+  let thoughts = 0;
+  for (const it of items) {
+    if (it.type === 'thought') { thoughts++; continue; }
+    const key = KIND_WORDING[it.kind] ? it.kind : 'other';
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const parts: string[] = [];
+  for (const [kind, n] of counts) {
+    const [verb, one, many] = KIND_WORDING[kind] || OTHER_WORDING;
+    parts.push(`${verb} ${plural(n, one, many)}`);
+  }
+  const extras: string[] = [];
+  if (thoughts) extras.push(plural(thoughts, 'thought', 'thoughts'));
+  const failed = runFailedCount(items);
+  if (failed) extras.push(`${failed} failed`);
+  return capitalise([parts.join(', '), ...extras].filter(Boolean).join(' · '));
+}
+
+/** Live caption for an active run: the latest thought's first line, ≤120 chars. */
+export function runCaption(items: RunItem[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]!;
+    if (it.type === 'thought') return clip(it.text, 120);
+  }
+  return null;
+}
+
+/** One-line preview of a thought, ≤100 chars. */
+export function thoughtPreview(text: string): string { return clip(text, 100); }
+
+export function runIsActive(items: RunItem[]): boolean {
+  return items.some((i) => i.type === 'tool' && (i.status === 'Pending' || i.status === 'Running'));
+}
+
+export function runFailedCount(items: RunItem[]): number {
+  return items.filter((i) => i.type === 'tool' && i.status === 'Failed').length;
+}
