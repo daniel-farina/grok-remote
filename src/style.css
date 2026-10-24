@@ -1977,16 +1977,18 @@ body::before {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: 18px;
+  padding: 8px 14px;
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.4;
-  /* Fixed-height input: no user drag handle. Internal scroll if the user
-     types more than fits; the chat layout above never shifts. */
+  /* One line to start; grows with its content up to ~5 lines (see
+     _autoGrowComposer), then scrolls internally. No drag handle. */
   resize: none;
-  height: 96px;
-  overflow-y: auto;
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  overflow-y: hidden;
   outline: none;
   transition: border-color 0.15s;
   /* contain keeps the textarea's input handling isolated from the rest of
@@ -2002,11 +2004,56 @@ body::before {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.composer-actions {
+.composer-row {
+  order: 2;
   display: flex;
-  justify-content: flex-end;
+  align-items: flex-end;
   gap: 8px;
 }
+/* Composer content lines up with the thread's reading column. */
+.composer-row,
+.composer > .attach-pills,
+.composer > .composer-hint {
+  width: 100%;
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.composer-attach,
+.composer-send {
+  all: unset;
+  box-sizing: border-box;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+.composer-attach {
+  border: 1px solid var(--border-2);
+  color: var(--muted);
+}
+.composer-attach:hover { color: var(--teal); border-color: var(--teal); }
+.composer-send {
+  background: var(--teal);
+  color: var(--bg);
+  font-weight: 700;
+}
+.composer-send:disabled { opacity: 0.4; cursor: not-allowed; }
+.composer-send--stop {
+  background: var(--panel-2);
+  color: var(--red);
+  border: 1px solid var(--border-2);
+  font-size: 14px;
+}
+.composer-attach:focus-visible,
+.composer-send:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.composer-debug { align-self: center; }
 
 .btn {
   background: transparent;
@@ -3185,11 +3232,6 @@ body::before {
   }
   .agent-kill { min-width: 44px; min-height: 44px; }
 
-  /* Composer height: smaller on mobile to leave room for the chat above,
-     but still strictly fixed (no resize handle, no grow on focus). */
-  .composer-input { height: 72px; min-height: 72px; max-height: 72px; }
-  .composer-actions { flex-wrap: wrap; }
-
   /* Tabs row: allow the action buttons (disconnect / copy convo) to wrap
      under the tabs when the row is too narrow. */
   .tabs { flex-wrap: wrap; row-gap: 6px; padding-right: 10px; }
@@ -3289,7 +3331,7 @@ body::before {
   .figlet { font-size: 13px; }
   .chat-intro { padding: 8px 10px; }
   .chat-stream { padding: 12px 12px; }
-  .composer { padding: 8px 10px; }
+  .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
   .settings { padding: 18px 14px 60px; }
   .tabs { padding: 8px 8px 0; }
   .tab { padding: 8px 10px; }
@@ -4177,7 +4219,6 @@ body::before {
 }
 .composer-hint.hidden { display: none; }
 
-/* image attach: button styling already inherits from .btn */
 .composer-attach.is-disabled,
 .composer-attach:disabled {
   opacity: 0.4;

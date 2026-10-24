@@ -27,6 +27,7 @@ import { EventDedup } from '../lib/event-dedup';
 import { StatusBar, type ConnState } from '../lib/status-bar';
 import { summarizeRun, type RunTool } from '../lib/thread-model';
 import { DetailsPanel } from '../lib/details-panel';
+import { enterAction } from '../lib/composer-keys';
 import { iconHtml } from '../lib/icons';
 import { fmtTokens } from '../lib/format';
 import { playIntro } from '../lib/intro-animation';
@@ -79,7 +80,6 @@ export class ChatView {
   availableCommands!: any;
   bgTermsStripEl!: any;
   composerAttachBtn!: any;
-  composerCancel!: any;
   composerDebugBtn!: any;
   composerEl!: any;
   composerFileInput!: any;
@@ -126,6 +126,7 @@ export class ChatView {
   _bgRunning = 0;
   detailsPanel!: DetailsPanel;
   _panelRunId: string | null = null;
+  _turnRunning = false;
   filesPanelBtn!: HTMLElement;
 
   constructor() {
@@ -616,27 +617,30 @@ export class ChatView {
   beginNewConversation() { this.focusConversation(); }
 
   buildComposer() {
+    const coarse = () => window.matchMedia('(pointer: coarse)').matches;
     const ta = el('textarea', {
       class: 'composer-input',
-      rows: '3',
-      placeholder: 'message the agent.  enter to send, shift+enter for newline.  type / for commands.',
+      rows: '1',
+      placeholder: 'Message grok…',
+      'aria-label': 'Message grok',
       onkeydown: (ev: any) => {
-        if (ev.key === 'Enter' && !ev.shiftKey) {
+        if (ev.key === 'Enter' && enterAction(ev, coarse()) === 'send') {
           ev.preventDefault();
           this.send();
         }
       },
+      oninput: () => this._autoGrowComposer(),
     });
+    // One button: send when idle, stop while a turn is running.
     const sendBtn = el('button', {
-      class: 'btn btn--primary composer-send',
-      onclick: () => this.send(),
-    }, 'send');
-    const cancelBtn = el('button', {
-      class: 'btn btn--ghost composer-cancel',
-      onclick: () => this.cancel(),
-    }, 'cancel turn');
+      class: 'composer-send',
+      type: 'button',
+      title: 'Send',
+      'aria-label': 'Send',
+      onclick: () => (this._turnRunning ? this.cancel() : this.send()),
+    }, '↑');
 
-    // Hidden file input used by the "attach image" button.
+    // Hidden file input used by the attach button.
     const fileInput = el('input', {
       type: 'file',
       class: 'composer-file-input',
@@ -645,17 +649,19 @@ export class ChatView {
       style: { display: 'none' },
     });
     const attachBtn = el('button', {
-      class: 'btn btn--ghost composer-attach',
+      class: 'composer-attach',
+      type: 'button',
       title: 'Attach image (saved to agent uploads/ folder)',
+      'aria-label': 'Attach image',
       onclick: (ev: any) => { ev.preventDefault(); fileInput.click(); },
-    }, 'attach image');
+    }, '＋');
 
     const debugBtn = el('button', {
       class: 'btn btn--ghost composer-debug',
       type: 'button',
       title: 'Preview the exact JSON payload that will be sent (composer + attachments), plus the last server-composed prompt if one exists.',
       onclick: (ev: any) => { ev.preventDefault(); this.openPayloadInspector(); },
-    }, '{ payload }');
+    }, '{ }');
     // Hidden by default; surfaced when settings.debug is true.
     debugBtn.hidden = true;
     this.composerDebugBtn = debugBtn;
@@ -665,7 +671,6 @@ export class ChatView {
 
     this.composerTa        = ta;
     this.composerSend      = sendBtn;
-    this.composerCancel    = cancelBtn;
     this.composerFileInput = fileInput;
     this.composerAttachBtn = attachBtn;
     this.composerHint      = hintCaption;
@@ -676,15 +681,30 @@ export class ChatView {
     return el('div', { class: 'composer' },
       this.palette,
       hintCaption,
-      ta,
-      el('div', { class: 'composer-actions' },
-        attachBtn,
-        debugBtn,
-        fileInput,
-        cancelBtn,
-        sendBtn,
-      ),
+      el('div', { class: 'composer-row' }, attachBtn, ta, debugBtn, sendBtn),
+      fileInput,
     );
+  }
+
+  // Grow the textarea with its content, up to about five lines.
+  _autoGrowComposer() {
+    const ta = this.composerTa;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    const max = parseFloat(getComputedStyle(ta).lineHeight || '20') * 5 + 16;
+    ta.style.height = `${Math.min(ta.scrollHeight, max)}px`;
+    ta.style.overflowY = ta.scrollHeight > max ? 'auto' : 'hidden';
+  }
+
+  _setTurnRunning(on: boolean) {
+    this._turnRunning = on;
+    const b = this.composerSend;
+    if (!b) return;
+    b.classList.toggle('composer-send--stop', on);
+    b.textContent = on ? '■' : '↑';
+    b.title = on ? 'Stop' : 'Send';
+    b.setAttribute('aria-label', on ? 'Stop' : 'Send');
+    b.disabled = on ? false : !this.agentId;
   }
 
   _attachComposerExtras() {
@@ -865,8 +885,7 @@ export class ChatView {
   _setComposerEnabled(enabled: any) {
     if (!this.composerTa) return;
     this.composerTa.disabled = !enabled;
-    this.composerSend.disabled = !enabled;
-    this.composerCancel.disabled = enabled; // only enable mid-turn... toggled in send()
+    this.composerSend.disabled = !enabled && !this._turnRunning;
   }
 
   setAgent(agent: any) {
@@ -943,7 +962,7 @@ export class ChatView {
     if (switchingAgent) this._lastRenderedTokens = 0;
     this._startBgTerminalsPolling();
     this._setComposerEnabled(true);
-    this.composerCancel.disabled = true;
+    this._setTurnRunning(false);
     this._syncConnectBtn();
     this._renderTokensPill();
     this._renderInflightPill();
@@ -1932,14 +1951,14 @@ export class ChatView {
       // refresh the info pane if visible
       if (this.tabsState === 'info') this.renderInfo(this.currentAgent);
     }
-    this.composerCancel.disabled = true;
+    this._setTurnRunning(false);
   }
 
   onAgentStatus(data: any) {
     const status = data && (data.status || data.state);
     if (!status) return;
     this._agentStatus = status;
-    this.composerCancel.disabled = status !== 'running';
+    this._setTurnRunning(status === 'running');
     this._renderStatus();
   }
 
@@ -1961,6 +1980,7 @@ export class ChatView {
     this._lastServerEcho = null;
 
     this.composerTa.value = '';
+    this._autoGrowComposer();
     if (this.composerHint) {
       this.composerHint.classList.add('hidden');
       this.composerHint.textContent = '';
@@ -1974,7 +1994,7 @@ export class ChatView {
     if (this._jumpToLatestBtn) this._jumpToLatestBtn.hidden = true;
     this.handleEvent('user_message', { text, attachments });
     this.scrollToBottom({ force: true });
-    this.composerCancel.disabled = false;
+    this._setTurnRunning(true);
 
     try {
       const resp = await api.prompt(this.agentId, { text, attachments });
