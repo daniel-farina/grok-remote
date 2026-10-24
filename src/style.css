@@ -897,6 +897,109 @@ body::before {
 }
 .pane.hidden { display: none; }
 
+/* ── status bar: one line above the thread, drop-down over it ────────── */
+.status-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  z-index: 20;
+}
+.status-bar {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.status-bar:hover .status-bar__chevron,
+.status-bar[aria-expanded="true"] .status-bar__chevron { color: var(--teal); }
+.status-bar:focus-visible { outline: 1px solid var(--teal); outline-offset: -1px; }
+.status-bar__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--dim);
+}
+.status-bar__dot--ok   { background: var(--green); }
+.status-bar__dot--warn { background: var(--amber); animation: agent-inflight-pulse 1.2s ease-in-out infinite; }
+.status-bar__dot--fail { background: var(--red); }
+.status-bar__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-bar__chevron { flex: none; color: var(--dim); }
+.status-backdrop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 100dvh;
+  background: rgba(0, 0, 0, 0.45);
+}
+.status-backdrop[hidden],
+.status-panel[hidden] { display: none; }
+.status-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: min(65dvh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border-2);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45);
+  padding: 4px 0 8px;
+}
+.status-panel .bgterms-strip,
+.status-panel .convo-skills-strip {
+  border-bottom: 1px solid var(--border);
+  background: none;
+}
+.status-panel__tools { padding: 4px 0; }
+.status-panel__label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding: 6px 16px 4px;
+}
+.status-panel__row {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.status-panel__row:hover { background: var(--panel-2); color: var(--text); }
+.status-panel__glyph { width: 1em; flex: none; text-align: center; }
+.status-panel__row--completed .status-panel__glyph { color: var(--green); }
+.status-panel__row--failed .status-panel__glyph { color: var(--red); }
+.status-panel__row--running .status-panel__glyph,
+.status-panel__row--pending .status-panel__glyph { color: var(--amber); }
+.status-panel__kind { flex: none; width: 56px; color: var(--amber); font-size: 10px; text-transform: lowercase; }
+.status-panel__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Background terminals strip pinned above the chat stream */
 .bgterms-strip {
   display: flex;
@@ -1208,18 +1311,7 @@ body::before {
   font-size: 12px;
 }
 
-.chat-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--muted);
-  min-height: 32px;
-}
-.chat-status-text { color: var(--muted); }
-.chat-status:empty { display: none; }
+
 
 .chat-stream {
   flex: 1;
@@ -2956,6 +3048,130 @@ body::before {
   -webkit-overflow-scrolling: touch;
 }
 
+@media (max-width: 720px) {
+  /* prevent iOS auto-zoom on form fields. */
+  .composer-input,
+  .inp,
+  input[type="text"],
+  input[type="number"],
+  input[type="search"],
+  input[type="url"],
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
+  /* hamburger visible on narrow */
+  .hamburger { display: flex; }
+
+  /* sidebar becomes an off-canvas drawer. Dashboard stays a flex column
+     so the chat pane keeps filling the viewport and the composer stays
+     pinned at the bottom on mobile too. */
+  .dashboard {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(82vw, 320px);
+    /* well above .drawer-backdrop (z-index 30) and the install banner */
+    z-index: 40;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    border-right: 1px solid var(--border);
+    border-bottom: none;
+    max-height: none;
+    padding-top: calc(14px + env(safe-area-inset-top));
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+    /* fully opaque so the dimmed backdrop never bleeds through */
+    background: var(--bg-soft);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+  }
+  body[data-drawer-open] .sidebar { transform: translateX(0); }
+  body:not([data-drawer-open]) .drawer-backdrop { display: none; }
+
+  .main-pane { width: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* tap targets >= 44 px */
+  .btn,
+  .topbar-btn,
+  .tab,
+  .agents-new-btn,
+  .agent-item,
+  #install-banner button {
+    min-height: 44px;
+  }
+  .agent-kill { min-width: 44px; min-height: 44px; }
+
+  /* Composer height: smaller on mobile to leave room for the chat above,
+     but still strictly fixed (no resize handle, no grow on focus). */
+  .composer-input { height: 72px; min-height: 72px; max-height: 72px; }
+  .composer-actions { flex-wrap: wrap; }
+
+  /* Tabs row: allow the action buttons (disconnect / copy convo) to wrap
+     under the tabs when the row is too narrow. */
+  .tabs { flex-wrap: wrap; row-gap: 6px; padding-right: 10px; }
+  .tabs-spacer { flex: 1 1 auto; min-width: 8px; }
+  .tab-action { padding: 5px 8px; font-size: 11px; }
+
+  /* Slim brand on mobile: only the "GR" mark stays visible.
+     Save horizontal space for the hamburger + status pill. */
+  .brand-name,
+  .brand-version { display: none; }
+
+  /* Show the close-drawer button on mobile. */
+  .sidebar-close { display: inline-block; }
+
+  /* The hamburger nudges the search/sort row a bit on narrow screens */
+  .sidebar-tools {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .sidebar-sort { max-width: none; width: 100%; }
+  .sidebar-search-input { font-size: 16px; padding: 8px 28px 8px 10px; }
+
+  /* Composer extras row: pills + attach button + send/cancel never overflow */
+  .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)) 10px; }
+
+  /* Bigger, more readable type on phones. The desktop palette uses 14 px
+     body / 11-13 px chrome which feels cramped on a 6 inch screen. Bump
+     base text and the dense info rows; keep tiny chrome (icons, status
+     pills) the same since they're glyphs, not reading text. */
+  html, body         { font-size: 16px; }
+  .chat-stream       { font-size: 15px; line-height: 1.55; }
+  .agent-name        { font-size: 15px; }
+  .agent-item-meta   { font-size: 12.5px; }
+  .agent-status      { font-size: 12.5px; }
+  .agent-link        { font-size: 12.5px; }
+  .agent-cwd         { font-size: 11px; }
+  .tab               { font-size: 13px; padding: 8px 12px; }
+  .tab-action        { font-size: 12px; }
+  .info-k, .info-v   { font-size: 13px; }
+  .tool-pill__label  { font-size: 12px; }
+  .tool-pill__status { font-size: 10px; }
+  .chip              { font-size: 12px; }
+  .files-row-name    { font-size: 14px; }
+  .files-row-size    { font-size: 12px; }
+  .composer-hint     { font-size: 12px; }
+
+  /* tool pills + info grid stack on narrow */
+  .tool-pill__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .tool-pill__label {
+    flex: 1 1 100%;
+    order: 5; /* push the label below the caret/kind/status row */
+  }
   .info-grid {
     grid-template-columns: 1fr;
     gap: 4px 0;

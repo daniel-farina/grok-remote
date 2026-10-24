@@ -162,6 +162,14 @@ export class ThreadRenderer {
     if (this.opts.onExpand) this.opts.onExpand(node);
   }
 
+  /** Show a run (from the status panel): desktop panel, or expand inline and scroll to it. */
+  revealRun(runId: string): void {
+    if (this.opts.onRunActivate && this.opts.onRunActivate(runId)) return;
+    if (!this.expanded.has(runId)) this.activateRun(runId);
+    const node = this.nodes.get(runId);
+    if (node) node.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
   /** Thoughts and tool cards of a run, interleaved in order. One live view per run. */
   runItemsView(runId: string): HTMLElement {
     const seg = this.opts.model.segment(runId);

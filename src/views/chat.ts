@@ -24,6 +24,8 @@ import { copyToClipboard, serializeThread, toolCardText, serializeResumeCommand 
 import { ThreadModel } from '../lib/thread-model';
 import { ThreadRenderer } from '../lib/thread-render';
 import { EventDedup } from '../lib/event-dedup';
+import { StatusBar, type ConnState } from '../lib/status-bar';
+import type { RunTool } from '../lib/thread-model';
 import { iconHtml } from '../lib/icons';
 import { fmtTokens } from '../lib/format';
 import { playIntro } from '../lib/intro-animation';
@@ -115,6 +117,12 @@ export class ChatView {
   model!: ThreadModel;
   thread!: ThreadRenderer;
   _seenEvents = new EventDedup();
+  statusBar!: StatusBar;
+  statusToolsEl!: HTMLElement;
+  _conn: ConnState = 'connected';
+  _connTimer: ReturnType<typeof setTimeout> | null = null;
+  _agentStatus: string | null = null;
+  _bgRunning = 0;
 
   constructor() {
     this.agentId = null;
@@ -140,7 +148,8 @@ export class ChatView {
     });
     this.composerEl = this.buildComposer();
     this.tabsEl    = this.buildTabs();
-    this.statusEl  = el('div', { class: 'chat-status' });
+    this.statusBar = new StatusBar();
+    this.statusEl  = this.statusBar.el;
 
     this.filesPane = el('div', { class: 'pane pane--files hidden' });
     this.filesMounted = false;
@@ -207,13 +216,17 @@ export class ChatView {
     this.convoSkillsStripEl = el('div', { class: 'convo-skills-strip', hidden: true });
     this._convoSkills = new Map(); // name -> count
 
+    // The status bar's drop-down holds the bg shells, this turn's tool
+    // calls and the skills used in this conversation.
+    this.statusToolsEl = el('div', { class: 'status-panel__tools' });
+    this.statusBar.setPanelContent(this.bgTermsStripEl, this.statusToolsEl, this.convoSkillsStripEl);
+    this.statusBar.onOpen = () => this._renderStatusTools();
+
     this.root = el('section', { class: 'chat' },
       this.tabsEl,
       el('div', { class: 'chat-body' },
         el('div', { class: 'pane pane--conversation' },
           this.statusEl,
-          this.bgTermsStripEl,
-          this.convoSkillsStripEl,
           this.streamEl,
           this.composerEl,
         ),
@@ -841,7 +854,9 @@ export class ChatView {
     // Fire-and-forget skill cache warmup so the banner can paint as soon
     // as a /name message lands. Harmless if the agent has none.
     this._loadSkills();
-    this.statusEl.textContent = '';
+    this._agentStatus = (agent && agent.status) || null;
+    this._bgRunning = 0;
+    this.statusBar.close();
     this.palette.classList.add('hidden');
     this.palette.replaceChildren();
     this.toastHost.replaceChildren();
@@ -915,7 +930,7 @@ export class ChatView {
 
     const agentIdAtCall = agent.id;
     this.refreshHistory()
-      .catch((e) => this.showStatus(`history load failed: ${e.message}`, 'warn'))
+      .catch((e) => this.showToast(`history load failed: ${e.message}`, 'warn'))
       .finally(() => {
         // Only show the intro if the agent we loaded history for is still
         // the active one (the user may have switched mid-load), there are
@@ -1205,10 +1220,10 @@ export class ChatView {
 
   openStreamForCurrent() {
     if (!this.agentId) return;
-    this.showStatus('connecting...', 'idle');
+    this._setConn('connected');
     this.stream = openStream(`/api/agents/${encodeURIComponent(this.agentId)}/stream`, {
-      onOpen:  () => this.showStatus('connected', 'ok'),
-      onError: () => this.showStatus('stream error · reconnecting', 'warn'),
+      onOpen:  () => this._setConn('connected'),
+      onError: () => this._setConn('reconnecting'),
       // The server resends its recent-event buffer on a fresh connect; skip
       // anything history already drew.
       onAny:   (name, data, ev) => {
@@ -1219,16 +1234,82 @@ export class ChatView {
   }
 
   closeStream() {
+    if (this._connTimer) { clearTimeout(this._connTimer); this._connTimer = null; }
     if (this.stream) {
       this.stream.close();
       this.stream = null;
     }
   }
 
-  showStatus(text: any, kind?: any) {
-    this.statusEl.replaceChildren(
-      el('span', { class: `status-pill status-pill--${kind || 'idle'}` }, '·'),
-      el('span', { class: 'chat-status-text' }, text),
+  // EventSource drops and retries constantly on phones (app switches, sleep).
+  // Only say "reconnecting" if the stream hasn't come back within 3s.
+  _setConn(state: ConnState) {
+    if (state === 'reconnecting') {
+      if (this._connTimer || this._conn === 'reconnecting') return;
+      this._connTimer = setTimeout(() => {
+        this._connTimer = null;
+        this._conn = 'reconnecting';
+        this._renderStatus();
+      }, 3000);
+      return;
+    }
+    if (this._connTimer) { clearTimeout(this._connTimer); this._connTimer = null; }
+    this._conn = state;
+    this._renderStatus();
+  }
+
+  _activeTurnTools(): RunTool[] {
+    const t = this.model.activeTurn();
+    if (!t) return [];
+    const out: RunTool[] = [];
+    for (const s of t.segments) {
+      if (s.type === 'run') for (const i of s.items) if (i.type === 'tool') out.push(i);
+    }
+    return out;
+  }
+
+  _renderStatus() {
+    if (!this.statusBar) return;
+    const running = this.model.isRunning() || this._agentStatus === 'running';
+    const tools = running ? this._activeTurnTools() : [];
+    let activity: string | null = null;
+    if (running) {
+      const busy = [...tools].reverse().find((t) => t.status === 'Running' || t.status === 'Pending');
+      activity = busy ? busy.title : 'thinking';
+      if (activity.length > 48) activity = `${activity.slice(0, 47)}…`;
+    }
+    this.statusBar.render({
+      conn: this._conn,
+      agentStatus: running ? 'running' : this._agentStatus,
+      activity,
+      toolsThisTurn: tools.length,
+      bgRunning: this._bgRunning,
+    });
+    if (this.statusBar.isOpen()) this._renderStatusTools();
+  }
+
+  // "This turn" section of the status drop-down: one row per tool call.
+  _renderStatusTools() {
+    const tools = this._activeTurnTools();
+    const glyph: Record<string, string> = { Completed: '✓', Failed: '✗', Canceled: '–', Running: '●', Pending: '●' };
+    const rows = tools.map((t) => el('button', {
+      type: 'button',
+      class: `status-panel__row status-panel__row--${t.status.toLowerCase()}`,
+      title: t.title,
+      onclick: () => {
+        this.statusBar.close();
+        const run = this.model.runOf(t.toolCallId);
+        if (run) this.thread.revealRun(run.id);
+      },
+    },
+      el('span', { class: 'status-panel__glyph' }, glyph[t.status] || '●'),
+      el('span', { class: 'status-panel__kind' }, t.kind),
+      el('span', { class: 'status-panel__title' }, t.title),
+    ));
+    this.statusToolsEl.replaceChildren(
+      el('div', { class: 'status-panel__label' },
+        tools.length ? `this turn · ${tools.length} tool call${tools.length === 1 ? '' : 's'}` : 'no tool calls this turn'),
+      ...rows,
     );
   }
 
@@ -1505,6 +1586,7 @@ export class ChatView {
     // opens the per-conversation viewer that shows the full list.
     const running = (list || []).filter((t: any) => !t.exited);
     const exitedCount = (list || []).length - running.length;
+    if (this._bgRunning !== running.length) { this._bgRunning = running.length; this._renderStatus(); }
     if (!running.length && !exitedCount) {
       this.bgTermsStripEl.replaceChildren();
       this.bgTermsStripEl.hidden = true;
@@ -1721,6 +1803,7 @@ export class ChatView {
       if (name === 'user_message' || name === 'user_message_chunk') this._decorateNewUser(ch);
     }
     this._syncLiveLine();
+    this._renderStatus();
     if (changed) this.scrollToBottom();
   }
 
@@ -1809,19 +1892,9 @@ export class ChatView {
   onAgentStatus(data: any) {
     const status = data && (data.status || data.state);
     if (!status) return;
-    if (status === 'running') {
-      this.showStatus('agent is running', 'warn');
-      this.composerCancel.disabled = false;
-    } else if (status === 'idle') {
-      this.showStatus('idle', 'ok');
-      this.composerCancel.disabled = true;
-    } else if (status === 'errored') {
-      this.showStatus('errored', 'fail');
-    } else if (status === 'killed') {
-      this.showStatus('killed', 'fail');
-    } else {
-      this.showStatus(status, 'idle');
-    }
+    this._agentStatus = status;
+    this.composerCancel.disabled = status !== 'running';
+    this._renderStatus();
   }
 
   onSessionNotification(data: any) {
