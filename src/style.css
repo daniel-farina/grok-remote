@@ -4521,6 +4521,155 @@ body::before {
   gap: 2px;
 }
 
+/* Desktop: page navigation sits in the topbar (moved there by main.ts). */
+.topbar .left-rail {
+  flex-direction: row;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 0;
+  gap: 2px;
+  margin-left: 18px;
+}
+.topbar .left-rail-item {
+  width: auto;
+  min-height: 30px;
+  flex-direction: row;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.topbar .left-rail-item:hover { background: var(--panel-2); }
+.topbar .left-rail-icon,
+.topbar .left-rail-icon svg { width: 16px; height: 16px; }
+.topbar .left-rail-label { font-size: 11px; max-width: none; }
+.topbar .left-rail-item--active::before {
+  left: 10px;
+  right: 10px;
+  top: auto;
+  bottom: -2px;
+  width: auto;
+  height: 2px;
+  border-radius: 2px;
+}
+
+/* Phone drawer: page links + tailnet status under the conversation list. */
+.drawer-nav { display: none; }
+.drawer-nav__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 6px;
+  color: var(--muted);
+  text-decoration: none;
+  font-family: var(--mono);
+  font-size: 14px;
+  border-radius: 6px;
+}
+.drawer-nav__item.left-rail-item--active { color: var(--teal); }
+.drawer-nav__icon,
+.drawer-nav__icon svg { width: 18px; height: 18px; display: inline-flex; }
+.drawer-nav__status {
+  margin-top: 8px;
+  padding: 0 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* Phone conversation header: ☰ | title | ⋯ (hidden on desktop). */
+.chat-mhead { display: none; }
+.chat-mhead__btn {
+  all: unset;
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 8px;
+}
+.chat-mhead__btn:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
+.chat-mhead__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text);
+  text-align: center;
+}
+
+.overflow-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  max-width: calc(100vw - 16px);
+  max-height: 70dvh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.5);
+  padding: 4px 0;
+}
+.overflow-menu[hidden] { display: none; }
+.overflow-menu__item {
+  all: unset;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 16px;
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+.overflow-menu__item:hover,
+.overflow-menu__item:focus-visible { background: var(--panel-2); color: var(--teal); }
+.overflow-menu__info {
+  padding: 10px 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dim);
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 720px) {
+  .topbar .left-rail { display: none; }
+  .drawer-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  /* In a conversation the chat view brings its own one-row header. */
+  body[data-route="chat"] .topbar,
+  body[data-route="home"] .topbar { display: none; }
+  .chat-mhead {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: calc(4px + env(safe-area-inset-top)) 6px 4px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-soft);
+  }
+  .chat > .tabs { display: none; }
+  .composer-debug { display: none !important; }
+  body[data-route="chat"] .app-footer,
+  body[data-route="home"] .app-footer { display: none; }
+}
+
 /* Shared system-page chrome (each page should put a .system-page wrapper
    inside main-pane so the title styling stays consistent). */
 .system-page {

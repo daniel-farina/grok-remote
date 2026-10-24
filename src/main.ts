@@ -62,6 +62,8 @@ function setStatus(kind: string, text: string): void {
   pill.classList.add(`status-pill--${kind}`);
   pill.textContent = kind === 'ok' ? '●' : (kind === 'fail' ? '×' : (kind === 'warn' ? '!' : '·'));
   txt.textContent = text;
+  const drawerStatus = document.getElementById('drawer-status');
+  if (drawerStatus) drawerStatus.textContent = text;
 }
 
 async function pingHello(): Promise<void> {
@@ -164,13 +166,34 @@ function buildLeftRail(): HTMLElement {
   return rail;
 }
 
+// Phone drawer footer: page links, settings and the tailnet status.
+function buildDrawerNav(): HTMLElement {
+  const link = (href: string, area: string, iconName: string, label: string) => {
+    const a = el('a', { class: 'drawer-nav__item', href, 'data-area': area, onclick: () => closeDrawer() });
+    const icon = document.createElement('span');
+    icon.className = 'drawer-nav__icon';
+    icon.innerHTML = iconHtml(iconName);
+    a.append(icon, el('span', {}, label));
+    return a;
+  };
+  return el('nav', { class: 'drawer-nav', 'aria-label': 'pages' },
+    link('#/', 'home', 'home', 'chats'),
+    ...SYSTEM_PAGES.map((p) => link(`#/${p.area}`, p.area, p.iconName || '', p.label)),
+    link('#/settings', 'settings', 'settings', 'settings'),
+    el('div', { class: 'drawer-nav__status', id: 'drawer-status' }),
+  );
+}
+
 function updateRailHighlight(route: Route): void {
+  // Lets CSS swap the phone chrome per page (the chat view has its own header).
+  document.body.dataset.route = route.name;
   const rail = document.querySelector('.left-rail');
   if (!rail) return;
   let activeArea = 'home';
   if (route.name === 'chat') activeArea = 'home';
   else if (route.name === 'system') activeArea = route.area;
-  for (const item of rail.querySelectorAll<HTMLElement>('.left-rail-item')) {
+  else if (route.name === 'settings') activeArea = 'settings';
+  for (const item of document.querySelectorAll<HTMLElement>('.left-rail-item, .drawer-nav__item')) {
     item.classList.toggle('left-rail-item--active', item.dataset.area === activeArea);
   }
 }
@@ -202,12 +225,19 @@ function mountDashboard(): void {
   const railHost = buildLeftRail();
   const shell = el('div', { class: 'dashboard dashboard--with-rail' });
   host.appendChild(shell);
-  shell.appendChild(railHost);
+  // Page navigation lives in the topbar on desktop (the sidebar only lists
+  // conversations) and in the slide-in drawer on phones.
+  const topbar = document.querySelector('.topbar');
+  const topbarRight = topbar && topbar.querySelector('.topbar-right');
+  if (topbar && topbarRight) topbar.insertBefore(railHost, topbarRight);
+  else shell.appendChild(railHost);
 
   const splitHost   = el('div', { class: 'split-host' });
   const sidebarPane = el('div', { class: 'sidebar-pane' });
   const mainPane    = el('div', { class: 'main-pane-wrap' });
   sidebar.mount(sidebarPane);
+  const drawer = sidebarPane.querySelector('.sidebar');
+  if (drawer) drawer.appendChild(buildDrawerNav());
   mainPane.appendChild(mainHost);
   splitHost.appendChild(sidebarPane);
   splitHost.appendChild(mainPane);

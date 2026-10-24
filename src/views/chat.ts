@@ -28,6 +28,7 @@ import { StatusBar, type ConnState } from '../lib/status-bar';
 import { summarizeRun, type RunTool } from '../lib/thread-model';
 import { DetailsPanel } from '../lib/details-panel';
 import { enterAction } from '../lib/composer-keys';
+import { overflowMenu } from '../lib/overflow-menu';
 import { iconHtml } from '../lib/icons';
 import { fmtTokens } from '../lib/format';
 import { playIntro } from '../lib/intro-animation';
@@ -127,6 +128,10 @@ export class ChatView {
   detailsPanel!: DetailsPanel;
   _panelRunId: string | null = null;
   _turnRunning = false;
+  mheadEl!: HTMLElement;
+  _mheadTitle!: HTMLElement;
+  _mheadLead!: HTMLElement;
+  _mheadMenu!: { refresh(): void; close(): void };
   filesPanelBtn!: HTMLElement;
 
   constructor() {
@@ -237,7 +242,9 @@ export class ChatView {
     this.statusBar.setPanelContent(this.bgTermsStripEl, this.statusToolsEl, this.convoSkillsStripEl);
     this.statusBar.onOpen = () => this._renderStatusTools();
 
+    this.mheadEl = this.buildPhoneHeader();
     this.root = el('section', { class: 'chat' },
+      this.mheadEl,
       this.tabsEl,
       el('div', { class: 'chat-body' },
         el('div', { class: 'pane pane--conversation' },
@@ -500,6 +507,7 @@ export class ChatView {
     if (this.settingsDrawerOpen) this._updateSettingsNotice(a);
     this._renderTokensPill();
     this._renderInflightPill();
+    this._syncPhoneHeader();
   }
 
   _syncConnectBtn() {
@@ -545,6 +553,8 @@ export class ChatView {
 
   switchTab(key: any) {
     this.tabsState = key;
+    this._mheadMenu?.close();
+    if (this._mheadTitle) queueMicrotask(() => this._syncPhoneHeader());
     for (const [k, btn] of Object.entries(this.tabBtns)) {
       (btn as any).classList.toggle('tab--active', k === key);
     }
@@ -615,6 +625,47 @@ export class ChatView {
   // Back-compat alias for older call sites. New code should use
   // focusConversation().
   beginNewConversation() { this.focusConversation(); }
+
+  // Phone header (≤720px): ☰ (or ‹ back from a pane) | title | ⋯.
+  // Hidden on desktop, where the tab row and action buttons stay.
+  buildPhoneHeader() {
+    this._mheadLead = el('button', {
+      type: 'button', class: 'chat-mhead__btn chat-mhead__lead', 'aria-label': 'Open menu',
+      onclick: () => {
+        if (this.tabsState !== 'conversation') { this.switchTab('conversation'); return; }
+        const ham = document.getElementById('hamburger-btn');
+        if (ham) ham.click();
+      },
+    }, '☰');
+    this._mheadTitle = el('div', { class: 'chat-mhead__title' }, 'Grok-Remote');
+    const more = el('button', { type: 'button', class: 'chat-mhead__btn chat-mhead__more', 'aria-label': 'More' }, '⋯');
+    const has = () => !!this.agentId;
+    this._mheadMenu = overflowMenu(more, [
+      { label: 'Files', onSelect: () => this.switchTab('files'), hidden: () => !has() },
+      { label: 'Info', onSelect: () => this.switchTab('info'), hidden: () => !has() },
+      { label: 'Trace', onSelect: () => this.switchTab('trace'), hidden: () => !has() },
+      { label: 'Flow', onSelect: () => this.switchTab('flow'), hidden: () => !has() },
+      { label: () => (this.currentAgent && this.currentAgent.starred ? 'Unstar' : 'Star'), onSelect: () => this.toggleStar(), hidden: () => !has() },
+      { label: () => { const t = (this.connectBtn && this.connectBtn.textContent) || 'connect'; return t.charAt(0).toUpperCase() + t.slice(1); }, onSelect: () => this.toggleConnection(), hidden: () => !has() },
+      { label: 'Agent settings', onSelect: () => this.toggleSettingsDrawer(), hidden: () => !has() },
+      { label: 'Copy conversation', onSelect: () => this.copyConversation(), hidden: () => !has() },
+      { label: () => `Theme: ${document.documentElement.getAttribute('data-theme') || 'dark'}`, onSelect: () => document.getElementById('theme-toggle')?.click() },
+      { label: '{ payload }', onSelect: () => this.openPayloadInspector(), hidden: () => !has() || !this.composerDebugBtn || this.composerDebugBtn.hidden },
+      { label: () => `${fmtTokens(this.latestTotalTokens || 0)} tokens`, hidden: () => !has() || !this.latestTotalTokens },
+    ]);
+    return el('header', { class: 'chat-mhead' }, this._mheadLead, this._mheadTitle, more);
+  }
+
+  _syncPhoneHeader() {
+    if (!this._mheadTitle) return;
+    const inPane = this.tabsState !== 'conversation';
+    this._mheadLead.textContent = inPane ? '‹' : '☰';
+    this._mheadLead.setAttribute('aria-label', inPane ? 'Back to conversation' : 'Open menu');
+    const name = (this.currentAgent && this.currentAgent.name) || (this.agentId ? 'conversation' : 'Grok-Remote');
+    const pane = inPane ? `${String(this.tabsState).charAt(0).toUpperCase()}${String(this.tabsState).slice(1)} · ` : '';
+    this._mheadTitle.textContent = `${pane}${name}`;
+    this._mheadMenu.refresh();
+  }
 
   buildComposer() {
     const coarse = () => window.matchMedia('(pointer: coarse)').matches;
@@ -933,6 +984,7 @@ export class ChatView {
     if (!agent || !agent.id) {
       this.agentId = null;
       this.currentAgent = null;
+      this._syncPhoneHeader();
       this.streamEl.appendChild(this.empty);
       this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       this.filesPane.replaceChildren();
@@ -958,6 +1010,7 @@ export class ChatView {
     }
     this.agentId = agent.id;
     this.currentAgent = agent;
+    this._syncPhoneHeader();
     this.latestTotalTokens = (agent && agent.totalTokens) || null;
     if (switchingAgent) this._lastRenderedTokens = 0;
     this._startBgTerminalsPolling();
