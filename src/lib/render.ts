@@ -311,7 +311,7 @@ function normalizeStatus(s: unknown): string | null {
   }
 }
 
-interface ToolPayload {
+export interface ToolPayload {
   toolCallId?: string;
   kind?: string;
   title?: string;
@@ -323,7 +323,7 @@ interface ToolPayload {
   [k: string]: unknown;
 }
 
-function readStatus(payload: ToolPayload | null | undefined): string | null {
+export function readStatus(payload: ToolPayload | null | undefined): string | null {
   if (!payload) return null;
   const meta = payload._meta && payload._meta.updateParams && payload._meta.updateParams.status;
   return normalizeStatus(meta) || normalizeStatus(payload.status) || null;
@@ -338,7 +338,10 @@ function fmtDur(ms: number): string {
   return `${m}m${s ? ` ${s}s` : ''}`;
 }
 
-function inferToolTitle(update: ToolPayload): string {
+/** Public alias used by the thread model. */
+export const readToolStatus = readStatus;
+
+export function inferToolTitle(update: ToolPayload): string {
   const title = update.title;
   const cmd = update.rawInput && (update.rawInput.command || update.rawInput.cmd);
   if (cmd) return String(cmd);
