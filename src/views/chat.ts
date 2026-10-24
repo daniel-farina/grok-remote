@@ -1258,6 +1258,8 @@ export class ChatView {
     try {
       const hist: any = await api.history(this.agentId, { turns, all });
       const events: any[] = (hist && Array.isArray(hist.events)) ? hist.events : [];
+      const keepExpanded = this.thread.expandedRuns();
+      const keepPanelRun = this.detailsPanel.isOpen() && this.detailsPanel.currentTab() === 'run' ? this._panelRunId : null;
       this.streamEl.replaceChildren();
       this.model.reset();
       this.thread.clear();
@@ -1285,11 +1287,14 @@ export class ChatView {
         this._isReplaying = false;
       }
       this._lastEventTs = null;
-      // agent_status running/idle is live-only (never stored in history), so
-      // tell the model the agent's current state. An interrupted turn whose
-      // agent is no longer running is closed off instead of spinning forever.
-      const st = this.currentAgent && this.currentAgent.status;
-      if (st) this.handleEvent('agent_status', { status: st }, { fromHistory: true });
+      this._syncLiveLine();
+      this._renderStatus();
+      // Put back what the user had open before the redraw (returning to the
+      // tab re-fetches history and rebuilds the thread).
+      this.thread.restoreExpanded(keepExpanded);
+      if (keepPanelRun) {
+        if (!this._openRunInPanel(keepPanelRun)) this.detailsPanel.close();
+      }
       // Scroll the stream to the bottom after a history load. Reset
       // auto-scroll: the user just opened the conversation, they want to be
       // at the latest message regardless of where the last session ended.
@@ -1592,6 +1597,17 @@ export class ChatView {
       for (const m of muts) m.addedNodes.forEach((n) => { if (n instanceof Element) ro.observe(n); });
     });
     mo.observe(this.streamEl, { childList: true });
+    // The thread itself shrinking (composer growing, keyboard opening) also
+    // needs the bottom re-pinned.
+    ro.observe(this.streamEl);
+    // Tool cards and the plan card toggle themselves; treat that like any
+    // other expand so following pauses instead of yanking the card away.
+    const onCardToggle = (ev: Event) => {
+      const t = ev.target as Element | null;
+      const head = t && t.closest && t.closest('.tool-pill__head, .todo-card__head');
+      if (head) this._pauseFollowAfterExpand(head as HTMLElement);
+    };
+    this.streamEl.addEventListener('click', onCardToggle);
 
     const onScroll = () => {
       const el = this.streamEl;
@@ -1649,6 +1665,7 @@ export class ChatView {
       window.removeEventListener('keydown', onKey);
       ro.disconnect();
       mo.disconnect();
+      this.streamEl.removeEventListener('click', onCardToggle);
       document.removeEventListener('visibilitychange', onVis);
       if (this._easedScrollRaf) { cancelAnimationFrame(this._easedScrollRaf); this._easedScrollRaf = 0; }
     };
@@ -2055,6 +2072,7 @@ export class ChatView {
       if (this.imageAttach) this.imageAttach.clear();
     } catch (e: any) {
       this.handleEvent('error', { message: e.message });
+      this._setTurnRunning(false);
     }
   }
 

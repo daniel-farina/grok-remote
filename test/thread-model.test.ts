@@ -216,3 +216,20 @@ test('footerText is one compact line with model, tokens and duration', () => {
   assert.equal(footerText({ outputTokens: 50 }, 4200), 'out 50 · 4s');
   assert.equal(footerText({}, null), 'turn complete');
 });
+
+test('a reconnect replay into an existing thread is not drawn again', () => {
+  const { model } = run([user('hi'), msg('hello'), complete(), status('idle'),
+    status('starting'), userChunk('hi'), msg('hello'), thought('old'), tool('old1'), status('idle')]);
+  assert.equal(model.turns.length, 1);
+  assert.deepEqual(types(model.turns[0]!.segments), ['user', 'message', 'footer']);
+  // a real new prompt afterwards still renders
+  model.apply('user_message', { text: 'next' }, { ts: 2 });
+  model.apply('agent_message_chunk', upd('agent_message_chunk', { content: txt('ok') }), { ts: 2 });
+  assert.equal(model.turns.length, 2);
+});
+
+test('the first replay into an empty thread (adopted session) is drawn', () => {
+  const { model } = run([status('starting'), userChunk('old prompt'), msg('old reply'), status('idle')]);
+  assert.equal(model.turns.length, 1);
+  assert.deepEqual(types(model.turns[0]!.segments), ['user', 'message']);
+});

@@ -46,6 +46,14 @@ export interface ModelChange {
 
 const ENDING_STATUSES = new Set(['idle', 'errored', 'killed', 'exited', 'disconnected']);
 
+// When grok reconnects to a session (ACP session/load) it replays the whole
+// conversation between agent_status "starting" and the next idle/running.
+// If the thread already has turns, that replay is a duplicate.
+const REPLAYED_EVENTS = new Set([
+  'user_message_chunk', 'agent_message_chunk', 'agent_thought_chunk',
+  'tool_call', 'tool_call_update', 'tool_call_delta_chunk',
+]);
+
 function toToolStatus(payload: ToolPayload): ToolStatus | null {
   const s = readToolStatus(payload);
   switch (s) {
@@ -64,6 +72,7 @@ export class ThreadModel {
   private ended = new WeakSet<Turn>();
   private running = false;
   private lastWasUserChunk = false;
+  private suppressReplay = false;
 
   reset(): void {
     this.turns = [];
@@ -75,6 +84,7 @@ export class ThreadModel {
     this.ended = new WeakSet<Turn>();
     this.running = false;
     this.lastWasUserChunk = false;
+    this.suppressReplay = false;
   }
 
   segment(id: string): Segment | undefined { return this.byId.get(id); }
@@ -87,6 +97,7 @@ export class ThreadModel {
     const ts = opts.ts ?? Date.now();
     const data = unwrap(payload) as Record<string, unknown>;
     const ch: ModelChange = { turnId: null, added: [], updated: [], removed: [], newTurn: false };
+    if (this.suppressReplay && REPLAYED_EVENTS.has(name)) return ch;
     const wasUserChunk = this.lastWasUserChunk;
     this.lastWasUserChunk = false;
 
@@ -349,6 +360,11 @@ export class ThreadModel {
   private onStatus(data: Record<string, unknown>, ch: ModelChange): void {
     const s = String(data.status || data.state || '');
     const turn = this.activeTurn();
+    if (s === 'starting') {
+      if (this.turns.length) this.suppressReplay = true;
+      return;
+    }
+    this.suppressReplay = false;
     if (s === 'running') {
       this.running = true;
       if (turn && !this.ended.has(turn)) turn.running = true;

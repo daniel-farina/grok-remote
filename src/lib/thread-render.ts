@@ -162,6 +162,21 @@ export class ThreadRenderer {
     if (this.opts.onExpand) this.opts.onExpand(node);
   }
 
+  /** Runs currently expanded inline (to restore them after a redraw). */
+  expandedRuns(): string[] { return [...this.expanded]; }
+
+  /** Re-expand runs inline after a redraw, without routing to the desktop panel. */
+  restoreExpanded(runIds: string[]): void {
+    for (const id of runIds) {
+      const node = this.nodes.get(id);
+      const seg = this.opts.model.segment(id);
+      if (!node || !seg || seg.type !== 'run' || this.expanded.has(id)) continue;
+      this.expanded.add(id);
+      node.appendChild(this.runItemsView(id));
+      this.paintRun(node, seg);
+    }
+  }
+
   /** Show a run (from the status panel): desktop panel, or expand inline and scroll to it. */
   revealRun(runId: string): void {
     if (this.opts.onRunActivate && this.opts.onRunActivate(runId)) return;
