@@ -196,3 +196,23 @@ test('prompt_result token counts fill the turn footer', () => {
   assert.equal(footer.meta.outputTokens, 26);
   assert.ok(changes[3]!.updated.includes(footer.id));
 });
+
+// ── compact footer ───────────────────────────────────────────────────
+import { footerText } from '../src/lib/thread-model.js';
+
+test('footer segment records when the turn ended', () => {
+  const m = new ThreadModel();
+  m.apply('user_message', { text: 'hi' }, { ts: 1000 });
+  m.apply('prompt_complete', { stopReason: 'end_turn' }, { ts: 73000 });
+  const f = m.turns[0]!.segments.find((s) => s.type === 'footer') as Extract<Segment, { type: 'footer' }>;
+  assert.equal(f.ts, 73000);
+});
+
+test('footerText is one compact line with model, tokens and duration', () => {
+  assert.equal(
+    footerText({ modelId: 'grok-4.7', inputTokens: 183198, outputTokens: 90 }, 72000),
+    'grok-4.7 · in 183k · out 90 · 1m 12s',
+  );
+  assert.equal(footerText({ outputTokens: 50 }, 4200), 'out 50 · 4s');
+  assert.equal(footerText({}, null), 'turn complete');
+});

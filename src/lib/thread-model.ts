@@ -29,7 +29,7 @@ export type Segment =
   | { id: string; type: 'plan'; toolCallId: string }
   | { id: string; type: 'error'; text: string }
   | { id: string; type: 'compacted'; text: string }
-  | { id: string; type: 'footer'; meta: Record<string, unknown> };
+  | { id: string; type: 'footer'; meta: Record<string, unknown>; ts: number };
 
 export type RunSegment = Extract<Segment, { type: 'run' }>;
 export type PlanSegment = Extract<Segment, { type: 'plan' }>;
@@ -98,7 +98,7 @@ export class ThreadModel {
       case 'tool_call': this.onTool(data as ToolPayload, ch); break;
       case 'tool_call_update': this.onTool(data as ToolPayload, ch); break;
       case 'tool_call_delta_chunk': this.onDelta(data as ToolPayload, ch); break;
-      case 'prompt_complete': this.onComplete(payload, data, ch); break;
+      case 'prompt_complete': this.onComplete(payload, data, ts, ch); break;
       case 'prompt_result': this.onResult(payload, ch); break;
       case 'agent_status': this.onStatus(data, ch); break;
       case 'error': this.onNote('error', data, ch); break;
@@ -326,13 +326,13 @@ export class ThreadModel {
     this.addTool(id, { toolCallId: id, status: 'running' }, ch);
   }
 
-  private onComplete(payload: unknown, data: Record<string, unknown>, ch: ModelChange): void {
+  private onComplete(payload: unknown, data: Record<string, unknown>, ts: number, ch: ModelChange): void {
     const turn = this.activeTurn();
     if (!turn || this.ended.has(turn)) return;
     const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
     const meta = (raw._meta as Record<string, unknown>) || (data._meta as Record<string, unknown>) || data;
     this.closeRun(turn, ch);
-    this.add(turn, { id: this.nextId(), type: 'footer', meta }, ch);
+    this.add(turn, { id: this.nextId(), type: 'footer', meta, ts }, ch);
     this.endTurn(turn, ch);
   }
 
@@ -430,4 +430,37 @@ export function runIsActive(items: RunItem[]): boolean {
 
 export function runFailedCount(items: RunItem[]): number {
   return items.filter((i) => i.type === 'tool' && i.status === 'Failed').length;
+}
+
+// ── turn footer ─────────────────────────────────────────────────────────
+
+function fmtTok(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 1e4) return `${Math.round(n / 1e3)}k`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1).replace(/\.0$/, '')}k`;
+  return String(n);
+}
+
+function fmtDuration(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m ? `${m}m ${s}s` : `${s}s`;
+}
+
+/** One muted line under a finished turn, e.g. "grok-4.7 · in 183k · out 90 · 1m 12s". */
+export function footerText(meta: Record<string, unknown>, durationMs: number | null): string {
+  const num = (...keys: string[]) => {
+    for (const k of keys) { const v = meta[k]; if (typeof v === 'number' && Number.isFinite(v)) return v; }
+    return null;
+  };
+  const parts: string[] = [];
+  const model = meta.modelId ?? meta.model_id;
+  if (typeof model === 'string' && model) parts.push(model);
+  const input = num('inputTokens', 'input_tokens');
+  const output = num('outputTokens', 'output_tokens');
+  if (input != null) parts.push(`in ${fmtTok(input)}`);
+  if (output != null) parts.push(`out ${fmtTok(output)}`);
+  if (durationMs != null && durationMs > 0) parts.push(fmtDuration(durationMs));
+  return parts.length ? parts.join(' · ') : 'turn complete';
 }

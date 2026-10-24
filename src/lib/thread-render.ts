@@ -7,12 +7,12 @@
 
 import {
   el, renderUserBubble, renderMarkdownLight, renderToolCard, renderTodoWriteCard,
-  renderTokenFooter, renderErrorBanner, renderCompactedPill,
+  renderErrorBanner, renderCompactedPill,
   type ToolCard, type ToolPayload,
 } from './render.js';
 import { unwrap } from './acp-payload.js';
 import {
-  ThreadModel, summarizeRun, runCaption, thoughtPreview, runIsActive, runFailedCount,
+  ThreadModel, summarizeRun, runCaption, thoughtPreview, runIsActive, runFailedCount, footerText,
   type ModelChange, type Segment, type RunSegment, type RunItem, type Turn,
 } from './thread-model.js';
 
@@ -287,8 +287,16 @@ export class ThreadRenderer {
         return renderErrorBanner(seg.text);
       case 'compacted':
         return renderCompactedPill(seg.text);
-      case 'footer':
-        return renderTokenFooter(seg.meta as never);
+      case 'footer': {
+        const turn = this.opts.model.turns.find((t) => t.segments.includes(seg));
+        const user = turn && turn.segments.find((x) => x.type === 'user');
+        const started = user && user.type === 'user' ? user.ts : null;
+        const detail = Object.entries(seg.meta)
+          .filter(([, v]) => typeof v === 'number' || typeof v === 'string')
+          .map(([k, v]) => `${k}: ${v}`).join('\n');
+        return el('div', { class: 'thread-footer', title: detail },
+          footerText(seg.meta, started != null ? seg.ts - started : null));
+      }
       default:
         return null;
     }

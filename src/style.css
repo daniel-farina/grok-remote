@@ -1551,6 +1551,12 @@ body::before {
   border-left: 2px solid var(--border);
 }
 .thread-run__missing { color: var(--dim); }
+.thread-footer {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--dim);
+  letter-spacing: 0.02em;
+}
 
 .thread-spinner {
   display: inline-block;
