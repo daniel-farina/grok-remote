@@ -897,6 +897,82 @@ body::before {
 }
 .pane.hidden { display: none; }
 
+/* ── conversation layout: main column + optional details panel ──────── */
+.pane--conversation { flex-direction: row; }
+.convo-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+/* Reading column: thread items stay a comfortable width on wide screens. */
+.chat-stream > .thread-turn,
+.chat-stream > .thread-live,
+.chat-stream > .history-load-more {
+  width: 100%;
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.thread-run--selected .thread-run__summary { color: var(--teal); }
+
+.details-panel {
+  flex: none;
+  width: clamp(320px, 30vw, 420px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+.details-panel[hidden] { display: none; }
+.details-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.details-panel__tab,
+.details-panel__close {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.details-panel__tab:hover,
+.details-panel__close:hover { color: var(--text); background: var(--panel-2); }
+.details-panel__tab--active { color: var(--teal); background: var(--panel-2); }
+.details-panel__close { font-size: 16px; line-height: 1; padding: 2px 8px; }
+.details-panel__spacer { flex: 1; }
+.details-panel__title {
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  border-bottom: 1px dashed var(--border);
+}
+.details-panel__title[hidden] { display: none; }
+.details-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+.details-panel__body[hidden] { display: none; }
+.details-panel__body--files { padding: 0; display: flex; flex-direction: column; }
+.details-panel__body--files > * { flex: 1; min-height: 0; }
+.details-panel .thread-run__items { margin: 0; padding-left: 0; border-left: none; }
+@media (max-width: 720px) {
+  .details-panel,
+  .tab-action--files { display: none !important; }
+}
+
 /* ── status bar: one line above the thread, drop-down over it ────────── */
 .status-wrap {
   position: relative;

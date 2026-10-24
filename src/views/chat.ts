@@ -25,7 +25,8 @@ import { ThreadModel } from '../lib/thread-model';
 import { ThreadRenderer } from '../lib/thread-render';
 import { EventDedup } from '../lib/event-dedup';
 import { StatusBar, type ConnState } from '../lib/status-bar';
-import type { RunTool } from '../lib/thread-model';
+import { summarizeRun, type RunTool } from '../lib/thread-model';
+import { DetailsPanel } from '../lib/details-panel';
 import { iconHtml } from '../lib/icons';
 import { fmtTokens } from '../lib/format';
 import { playIntro } from '../lib/intro-animation';
@@ -123,6 +124,9 @@ export class ChatView {
   _connTimer: ReturnType<typeof setTimeout> | null = null;
   _agentStatus: string | null = null;
   _bgRunning = 0;
+  detailsPanel!: DetailsPanel;
+  _panelRunId: string | null = null;
+  filesPanelBtn!: HTMLElement;
 
   constructor() {
     this.agentId = null;
@@ -145,6 +149,16 @@ export class ChatView {
       agentId: () => this.agentId,
       animate: () => !this._isReplaying,
       onExpand: (node) => this._pauseFollowAfterExpand(node),
+      onRunActivate: (runId) => this._openRunInPanel(runId),
+    });
+    this.detailsPanel = new DetailsPanel({
+      mountFiles: (into) => {
+        // Files is a singleton: take it over from the Files tab if needed.
+        if (this.filesMounted) { this.filesMounted = false; this.filesPane.replaceChildren(); }
+        mountFilesTab(into, { id: this.agentId });
+      },
+      onFilesHidden: () => unmountFilesTab(),
+      onClose: () => this._markPanelRun(null),
     });
     this.composerEl = this.buildComposer();
     this.tabsEl    = this.buildTabs();
@@ -226,9 +240,12 @@ export class ChatView {
       this.tabsEl,
       el('div', { class: 'chat-body' },
         el('div', { class: 'pane pane--conversation' },
-          this.statusEl,
-          this.streamEl,
-          this.composerEl,
+          el('div', { class: 'convo-main' },
+            this.statusEl,
+            this.streamEl,
+            this.composerEl,
+          ),
+          this.detailsPanel.el,
         ),
         this.filesPane,
         this.infoPane,
@@ -353,6 +370,12 @@ export class ChatView {
       title: 'Copy entire conversation as plain text',
       onclick: () => this.copyConversation(),
     }, 'copy');
+    this.filesPanelBtn = el('button', {
+      class: 'tab-action tab-action--files',
+      type: 'button',
+      title: 'Browse files beside the conversation',
+      onclick: () => this.detailsPanel.showFiles(),
+    }, 'files ▸');
     this.tokensPill = el('span', { class: 'tab-tokens', hidden: true });
     this.inflightPill = el('span', { class: 'tab-inflight', hidden: true });
     return el('nav', { class: 'tabs' },
@@ -368,6 +391,7 @@ export class ChatView {
         this.starBtn,
         this.settingsBtn,
         this.connectBtn,
+        this.filesPanelBtn,
         this.copyConvoBtn,
       ),
     );
@@ -532,6 +556,7 @@ export class ChatView {
 
     if (key === 'files') {
       if (this.agentId) {
+        this.detailsPanel.filesTakenElsewhere();
         mountFilesTab(this.filesPane, { id: this.agentId });
         this.filesMounted = true;
       } else if (!this.filesMounted) {
@@ -848,6 +873,7 @@ export class ChatView {
     // agent: { id, ... } or null
     this.closeStream();
     this._cancelChatIntro();
+    this.detailsPanel.close();
     this.streamEl.replaceChildren();
     this.model.reset();
     this.thread.clear();
@@ -1801,6 +1827,10 @@ export class ChatView {
       if (ch.newTurn) this._cancelChatIntro();
       this.thread.apply(ch, name, payload);
       if (name === 'user_message' || name === 'user_message_chunk') this._decorateNewUser(ch);
+      if (this._panelRunId && ch.updated.includes(this._panelRunId)) {
+        const seg = this.model.segment(this._panelRunId);
+        if (seg && seg.type === 'run') this.detailsPanel.setRunTitle(summarizeRun(seg.items));
+      }
     }
     this._syncLiveLine();
     this._renderStatus();
@@ -1815,6 +1845,22 @@ export class ChatView {
     const last = t && t.segments[t.segments.length - 1];
     const runOpen = !!(last && last.type === 'run' && last.open);
     this.thread.liveLine(this.model.isRunning() && !runOpen ? 'Thinking…' : null);
+  }
+
+  // Desktop: tool runs open in the details panel instead of inline.
+  _openRunInPanel(runId: string): boolean {
+    if (window.matchMedia('(max-width: 720px)').matches) return false;
+    const seg = this.model.segment(runId);
+    if (!seg || seg.type !== 'run') return false;
+    this.detailsPanel.showRun(summarizeRun(seg.items), this.thread.runItemsView(runId));
+    this._markPanelRun(runId);
+    return true;
+  }
+
+  _markPanelRun(runId: string | null) {
+    if (this._panelRunId) this.thread.nodeOf(this._panelRunId)?.classList.remove('thread-run--selected');
+    this._panelRunId = runId;
+    if (runId) this.thread.nodeOf(runId)?.classList.add('thread-run--selected');
   }
 
   _decorateNewUser(ch: any) {
