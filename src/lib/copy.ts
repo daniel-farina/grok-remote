@@ -4,11 +4,13 @@
 //   falls back to a hidden textarea + document.execCommand('copy') for
 //   non-secure contexts (e.g., tailnet http://).
 //
-// serializeConversation(turns): renders the in-memory ChatView.turns array
-//   to a plain ASCII text block suitable for pasting into a file.
+// serializeThread(turns, toolText): renders the thread model's turns to a
+//   plain text block suitable for pasting into a file.
 //
 // serializeResumeCommand(agent): renders the "Resume on CLI" instructions
 //   that get pasted into a terminal.
+
+import type { Turn } from './thread-model.js';
 
 export async function copyToClipboard(text: unknown): Promise<boolean> {
   const s = text == null ? '' : String(text);
@@ -41,24 +43,6 @@ export async function copyToClipboard(text: unknown): Promise<boolean> {
 }
 
 // Public structural shapes for the conversation serializer.
-export interface ConvoBubble {
-  text?: string | (() => string);
-}
-
-export interface ConvoToolEntry {
-  card?: {
-    node?: { querySelector?: (sel: string) => Element | null } | null;
-  } | null;
-}
-
-export interface ConvoTurn {
-  userText?: string;
-  user?: HTMLElement | { querySelector?: (sel: string) => Element | null; textContent?: string | null } | null;
-  thinking?: ConvoBubble | null;
-  tools?: ConvoToolEntry[] | null;
-  assistant?: ConvoBubble | null;
-}
-
 export interface ConvoAgent {
   id?: string | null;
   name?: string | null;
@@ -71,119 +55,70 @@ export interface ConvoCtx {
   agent?: ConvoAgent | null;
 }
 
-function bubbleText(b: ConvoBubble | null | undefined): string {
-  if (!b) return '';
-  if (typeof b.text === 'function') {
-    try { return b.text() || ''; } catch { /* ignore */ }
-  }
-  if (typeof b.text === 'string') return b.text;
-  return '';
-}
-
-function userText(turn: ConvoTurn | null | undefined): string {
-  if (!turn) return '';
-  if (typeof turn.userText === 'string') return turn.userText;
-  const node = turn.user as { querySelector?: (sel: string) => Element | null; textContent?: string | null } | null | undefined;
-  if (node && typeof node.querySelector === 'function') {
-    const body = node.querySelector('.msg-body');
-    if (body) return (body.textContent || '').trim();
-  }
-  if (node && node.textContent) return node.textContent.replace(/^you\s*/i, '').trim();
-  return '';
-}
-
-function toolTitle(t: ConvoToolEntry | null | undefined): string {
-  if (!t || !t.card) return 'tool call';
-  const node = t.card.node;
-  if (node && typeof node.querySelector === 'function') {
-    const titleEl = node.querySelector('.tool-title');
-    if (titleEl) return (titleEl.textContent || 'tool call').trim();
-  }
-  return 'tool call';
-}
-
-function toolRawInputJson(t: ConvoToolEntry | null | undefined): string {
-  if (!t || !t.card) return '';
-  const node = t.card.node;
-  if (node && typeof node.querySelector === 'function') {
-    const body = node.querySelector('.tool-raw-body');
-    if (body) return (body.textContent || '').trim();
-  }
-  return '';
-}
-
-function toolOutput(t: ConvoToolEntry | null | undefined): string {
-  if (!t || !t.card) return '';
-  const node = t.card.node;
-  if (node && typeof node.querySelector === 'function') {
-    const body = node.querySelector('.tool-output-body');
-    if (body) return (body.textContent || '').trim();
-  }
-  return '';
-}
-
 function indent(text: string, prefix: string): string {
   if (!text) return '';
   return String(text).split('\n').map((l) => prefix + l).join('\n');
 }
 
-export function serializeConversation(turns: ConvoTurn[] | null | undefined, ctx?: ConvoCtx | null): string {
+/** Raw input and output text of a rendered tool card (used by copy). */
+export function toolCardText(node: { querySelector?: (sel: string) => Element | null } | null | undefined): string {
+  if (!node || typeof node.querySelector !== 'function') return '';
+  const raw = (node.querySelector('.tool-raw-body')?.textContent || '').trim();
+  const out = (node.querySelector('.tool-output-body')?.textContent || '').trim();
+  const parts: string[] = [];
+  if (raw) parts.push(indent(raw, '  '));
+  if (out) parts.push(`Output:\n${out}`);
+  return parts.join('\n\n');
+}
+
+/**
+ * Plain-text copy of the conversation, in the order things happened.
+ * `toolText(toolCallId)` returns a tool call's input/output text.
+ */
+export function serializeThread(
+  turns: Turn[] | null | undefined,
+  toolText: (toolCallId: string) => string,
+  ctx?: ConvoCtx | null,
+): string {
   const agent: ConvoAgent = (ctx && ctx.agent) || {};
-  const captured = new Date().toISOString();
   const lines: string[] = [];
   lines.push(`# Conversation with ${agent.name || agent.id || 'agent'}`);
   if (agent.model) lines.push(`# Model: ${agent.model}`);
   if (agent.sessionId) lines.push(`# Session: ${agent.sessionId}`);
-  lines.push(`# Captured: ${captured}`);
+  lines.push(`# Captured: ${new Date().toISOString()}`);
   lines.push('');
 
-  const list = Array.isArray(turns) ? turns : [];
-  let first = true;
-  for (const turn of list) {
-    if (!first) {
-      lines.push('');
-      lines.push('----');
-      lines.push('');
-    }
-    first = false;
-
-    lines.push('## You');
-    lines.push(userText(turn) || '(empty)');
+  const section = (title: string, body: string) => {
+    lines.push(`## ${title}`);
+    if (body) lines.push(body);
     lines.push('');
+  };
+  const tool = (id: string, title: string, status?: string) => {
+    section(`Tool: ${title}${status ? ` (${status.toLowerCase()})` : ''}`, toolText(id).trim());
+  };
 
-    const thinking = bubbleText(turn.thinking).trim();
-    if (thinking) {
-      lines.push('## Thinking');
-      lines.push(thinking);
-      lines.push('');
-    }
-
-    if (Array.isArray(turn.tools)) {
-      for (const t of turn.tools) {
-        lines.push(`## Tool: ${toolTitle(t)}`);
-        const raw = toolRawInputJson(t);
-        if (raw) {
-          lines.push(indent(raw, '  '));
-        }
-        const out = toolOutput(t);
-        if (out) {
-          lines.push('');
-          lines.push('Output:');
-          lines.push(out);
-        }
-        lines.push('');
+  (turns || []).forEach((turn, i) => {
+    if (i > 0) lines.push('', '----', '');
+    for (const seg of turn.segments) {
+      switch (seg.type) {
+        case 'user':      section('You', seg.text || '(empty)'); break;
+        case 'marker':    section(`Grok (${seg.text})`, ''); break;
+        case 'message':   section('Grok', seg.text.trim()); break;
+        case 'thought':   section('Thinking', seg.text.trim()); break;
+        case 'run':
+          for (const it of seg.items) {
+            if (it.type === 'thought') section('Thinking', it.text.trim());
+            else tool(it.toolCallId, it.title, it.status);
+          }
+          break;
+        case 'plan':      tool(seg.toolCallId, 'plan'); break;
+        case 'error':     section('Error', seg.text); break;
+        case 'compacted': section('Compacted', seg.text); break;
+        default: break; // footer
       }
     }
+  });
 
-    const assistant = bubbleText(turn.assistant).trim();
-    if (assistant) {
-      lines.push('## Grok');
-      lines.push(assistant);
-      lines.push('');
-    }
-  }
-
-  // collapse trailing blanks
   while (lines.length && lines[lines.length - 1] === '') lines.pop();
   return lines.join('\n') + '\n';
 }

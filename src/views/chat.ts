@@ -20,7 +20,7 @@ import attachSlashPalette from '../lib/slash-palette';
 import { setupImageAttach } from '../lib/attach-images';
 import { el, renderToast } from '../lib/render';
 import { unwrap } from '../lib/acp-payload.js';
-import { copyToClipboard, serializeConversation, serializeResumeCommand } from '../lib/copy';
+import { copyToClipboard, serializeThread, toolCardText, serializeResumeCommand } from '../lib/copy';
 import { ThreadModel } from '../lib/thread-model';
 import { ThreadRenderer } from '../lib/thread-render';
 import { EventDedup } from '../lib/event-dedup';
@@ -480,11 +480,11 @@ export class ChatView {
       this.showToast('no agent selected', 'warn');
       return;
     }
-    const turns = this.model.turns.map((t: any) => ({
-      userText: (t.segments.find((s: any) => s.type === 'user') || {}).text || '',
-      assistant: { text: t.segments.filter((s: any) => s.type === 'message').map((s: any) => s.text).join('\n\n') },
-    }));
-    const text = serializeConversation(turns, { agent: this.currentAgent || { id: this.agentId } });
+    const text = serializeThread(
+      this.model.turns,
+      (id: string) => toolCardText(this.thread.ensureToolCard(id)?.node),
+      { agent: this.currentAgent || { id: this.agentId } },
+    );
     const ok = await copyToClipboard(text);
     if (ok) {
       this.flashBtnLabel(this.copyConvoBtn, 'copied');

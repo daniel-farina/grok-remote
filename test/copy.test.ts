@@ -1,11 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  serializeConversation,
-  serializeResumeCommand,
-  type ConvoTurn,
-} from '../src/lib/copy.js';
+import { serializeResumeCommand } from '../src/lib/copy.js';
 
 test('serializeResumeCommand fills in sessionId and cwd when given', () => {
   const out = serializeResumeCommand({
@@ -30,87 +26,52 @@ test('serializeResumeCommand also handles partial agent records', () => {
   assert.match(out, /cd <cwd>/);
 });
 
-test('serializeConversation emits a header with agent name and model', () => {
-  const out = serializeConversation([], {
-    agent: { name: 'Worker', model: 'grok-2', sessionId: 's1' },
-  });
-  assert.match(out, /^# Conversation with Worker/);
-  assert.match(out, /^# Model: grok-2/m);
-  assert.match(out, /^# Session: s1/m);
-  assert.match(out, /^# Captured: \d{4}-\d{2}-\d{2}T/m);
+// ── serializeThread (from the thread model) ────────────────────────────
+import { serializeThread } from '../src/lib/copy.js';
+import type { Turn } from '../src/lib/thread-model.js';
+
+test('serializeThread keeps segment order', () => {
+  const turns: Turn[] = [{
+    id: 't1', running: false, background: false,
+    segments: [
+      { id: 's1', type: 'user', text: 'please list files', attachments: [], ts: 1 },
+      { id: 's2', type: 'message', text: 'Listing now.', ts: 1 },
+      { id: 's3', type: 'run', open: false, items: [
+        { type: 'thought', id: 's4', text: 'use ls' },
+        { type: 'tool', toolCallId: 'c1', kind: 'execute', title: 'ls -la', status: 'Completed' },
+      ] },
+      { id: 's5', type: 'message', text: 'Two files.', ts: 2 },
+    ],
+  }];
+  const out = serializeThread(turns, (id) => (id === 'c1' ? 'TOOL-OUTPUT-1' : ''), { agent: { name: 'demo' } });
+  const order = ['please list files', 'Listing now.', 'use ls', 'ls -la', 'TOOL-OUTPUT-1', 'Two files.'].map((s) => out.indexOf(s));
+  assert.ok(order.every((i) => i >= 0), `missing piece in:\n${out}`);
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.ok(out.startsWith('# Conversation with demo'));
 });
 
-test('serializeConversation falls back to agent id when no name', () => {
-  const out = serializeConversation([], { agent: { id: 'agent-007' } });
-  assert.match(out, /^# Conversation with agent-007/);
+test('serializeThread marks background turns', () => {
+  const turns: Turn[] = [{
+    id: 't2', running: false, background: true,
+    segments: [
+      { id: 'm', type: 'marker', text: 'background update' },
+      { id: 'x', type: 'message', text: 'Download finished.', ts: 1 },
+    ],
+  }];
+  const out = serializeThread(turns, () => '');
+  assert.ok(out.includes('background update'));
+  assert.ok(out.includes('Download finished.'));
 });
 
-test('serializeConversation handles null ctx and empty turns gracefully', () => {
-  const out = serializeConversation([], null);
-  assert.match(out, /^# Conversation with agent/);
+test('serializeThread falls back to agent id and tolerates null ctx', () => {
+  assert.ok(serializeThread([], () => '', { agent: { id: 'abc' } }).startsWith('# Conversation with abc'));
+  assert.ok(serializeThread(null, () => '', null).startsWith('# Conversation with agent'));
 });
 
-test('serializeConversation emits You/Grok sections per turn', () => {
-  const turns: ConvoTurn[] = [
-    {
-      userText: 'hello there',
-      assistant: { text: 'hi back' },
-    },
-  ];
-  const out = serializeConversation(turns, { agent: { name: 'a' } });
-  assert.match(out, /## You\nhello there/);
-  assert.match(out, /## Grok\nhi back/);
-});
-
-test('serializeConversation handles bubble.text as a function', () => {
-  const turns: ConvoTurn[] = [
-    {
-      userText: 'q',
-      assistant: { text: () => 'computed answer' },
-    },
-  ];
-  const out = serializeConversation(turns, null);
-  assert.match(out, /computed answer/);
-});
-
-test('serializeConversation emits "(empty)" placeholder when user has no text', () => {
-  const turns: ConvoTurn[] = [{ assistant: { text: 'answer only' } }];
-  const out = serializeConversation(turns, null);
-  assert.match(out, /## You\n\(empty\)/);
-});
-
-test('serializeConversation includes a Thinking section when present', () => {
-  const turns: ConvoTurn[] = [
-    {
-      userText: 'plan?',
-      thinking: { text: 'considering options' },
-      assistant: { text: 'done' },
-    },
-  ];
-  const out = serializeConversation(turns, null);
-  assert.match(out, /## Thinking\nconsidering options/);
-});
-
-test('serializeConversation separates turns with a horizontal divider', () => {
-  const turns: ConvoTurn[] = [
-    { userText: 'one', assistant: { text: 'a' } },
-    { userText: 'two', assistant: { text: 'b' } },
-  ];
-  const out = serializeConversation(turns, null);
-  // exactly one ---- divider between the two turns
-  const dividers = out.match(/^----$/gm) || [];
-  assert.equal(dividers.length, 1);
-});
-
-test('serializeConversation tolerates a function that throws when reading text', () => {
-  const turns: ConvoTurn[] = [
-    {
-      userText: 'q',
-      assistant: { text: () => { throw new Error('boom'); } },
-    },
-  ];
-  const out = serializeConversation(turns, null);
-  // Should still emit the user section; no Grok section since bubble threw.
-  assert.match(out, /## You\nq/);
-  assert.doesNotMatch(out, /## Grok/);
+test('serializeThread separates turns and marks empty prompts', () => {
+  const mk = (id: string, text: string): Turn => ({ id, running: false, background: false,
+    segments: [{ id: `${id}u`, type: 'user', text, attachments: [], ts: 1 }] });
+  const out = serializeThread([mk('a', ''), mk('b', 'second')], () => '');
+  assert.ok(out.includes('(empty)'));
+  assert.ok(out.includes('----'));
 });
