@@ -313,8 +313,7 @@ body::before {
   background: var(--bg);
 }
 
-/* Split.js gutter (used by both the outer sidebar/main split and the inner
-   chat/tools-col split). Teal-on-hover to match the rest of the palette. */
+/* Split.js gutter (used by the outer sidebar/main split). Teal-on-hover to match the rest of the palette. */
 .gutter {
   background-color: var(--border);
   background-repeat: no-repeat;
@@ -1174,60 +1173,6 @@ body::before {
 }
 
 /* Active jobs strip pinned above the chat stream */
-.inflight-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 16px;
-  border-bottom: 1px dashed var(--border);
-  background: linear-gradient(180deg, rgba(252, 168, 84, 0.06), transparent);
-}
-.inflight-strip[hidden] { display: none; }
-.inflight-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  background: var(--panel-2);
-  border: 1px solid rgba(252, 168, 84, 0.4);
-  border-radius: 999px;
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 11px;
-  cursor: pointer;
-  max-width: 100%;
-}
-.inflight-chip:hover { background: var(--panel); }
-.inflight-chip__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--amber);
-  flex: 0 0 auto;
-  animation: agent-inflight-pulse 1.2s ease-in-out infinite;
-}
-.inflight-chip__kind {
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--blue);
-  font-weight: 600;
-  flex: 0 0 auto;
-}
-.inflight-chip__label {
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
-  min-width: 0;
-}
-.inflight-chip__dur {
-  font-size: 10px;
-  color: var(--dim);
-  font-variant-numeric: tabular-nums;
-  flex: 0 0 auto;
-}
 
 /* Brief highlight when a chip is clicked and we scroll to the corresponding
    pill in the stream. Subtle so it doesn't read as a glitch. */
@@ -1286,118 +1231,6 @@ body::before {
   min-height: 0;
 }
 
-/* Two-column split inside the conversation pane: chat on the left,
-   tool calls on the right. Powered by Split.js (gutter rules live with the
-   outer split CSS above). State persisted to localStorage. */
-.chat-split {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-}
-.chat-split > .chat-stream {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.chat-tools-col {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-  border-left: 1px solid var(--border);
-  min-height: 0;
-  min-width: 0;
-}
-.chat-tools-col__head {
-  display: flex;
-  align-items: center;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel-2);
-}
-.chat-tools-col__title {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--dim);
-  font-weight: 600;
-}
-.chat-tools-col__toggle {
-  margin-left: auto;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  border-radius: 4px;
-  padding: 1px 8px;
-  font-family: var(--mono);
-  font-size: 12px;
-  cursor: pointer;
-  line-height: 1;
-}
-.chat-tools-col__toggle:hover { color: var(--teal); border-color: var(--teal); }
-.chat-tools-stream {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 0;
-}
-
-/* Collapsed tools column: Split.js is destroyed; we collapse the column
-   to a thin strip that only shows the header (so the user can still find
-   the expand toggle). The chat-stream reclaims the rest. */
-.chat-split--tools-collapsed > .chat-stream {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-/* Fully hide the tools column when collapsed. The topbar's right-side
-   panel button is the entry point to bring it back. */
-.chat-split--tools-collapsed > .chat-tools-col {
-  display: none;
-}
-
-/* Per-turn grouping in the tools column: a small header showing the
-   user-message snippet that triggered this batch of tool calls. */
-.tools-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-bottom: 8px;
-  border-bottom: 1px dashed var(--border);
-}
-.tools-group:last-child { border-bottom: none; }
-.tools-group__head {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  letter-spacing: 0.04em;
-}
-
-/* Mobile: stack the tools column below the chat. Split.js doesn't
-   initialize at this breakpoint (see chat.js _isChatMobile), so any
-   inline flex-basis is overridden here to keep the stacked layout. */
-@media (max-width: 720px) {
-  .chat-split {
-    flex-direction: column;
-  }
-  .chat-split > .chat-stream {
-    flex: 1 1 auto !important;
-    min-width: 0;
-  }
-  .chat-tools-col {
-    flex: 0 0 auto !important;
-    border-left: none;
-    border-top: 1px solid var(--border);
-    max-height: 40vh;
-  }
-}
 
 .chat-empty {
   margin: auto;
@@ -1456,7 +1289,121 @@ body::before {
      contain-intrinsic-size is a rough placeholder height so the scrollbar
      stays accurate while the browser holds off rendering. */
   content-visibility: auto;
-  contain-intrinsic-size: 0 240px;
+  /* `auto` remembers each turn's real height once it has rendered. */
+  contain-intrinsic-size: auto 240px;
+}
+
+/* ── conversation thread (chat-first) ───────────────────────────────────
+   Messages read as plain text, thoughts as one grey italic line, and each
+   run of tool calls as a single summary line that opens on tap. */
+.thread-turn { gap: 10px; }
+.thread-turn--background { border-bottom-style: dotted; }
+.thread-marker {
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+.thread-msg {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+  max-width: min(80ch, 100%);
+  word-break: break-word;
+}
+[data-theme="hacker"] .thread-msg { font-family: var(--mono); font-size: 13px; }
+.thread-msg .md-code { font-size: 12px; }
+
+.thread-thought,
+.thread-run__caption {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+[data-theme="hacker"] .thread-thought,
+[data-theme="hacker"] .thread-run__caption { font-family: var(--mono); }
+.thread-thought { font-size: 12px; color: var(--muted); min-width: 0; }
+.thread-thought__head,
+.thread-run__head {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+}
+.thread-thought__head { font-style: italic; }
+.thread-thought__head:focus-visible,
+.thread-run__head:focus-visible { outline: 1px solid var(--teal); outline-offset: 2px; }
+.thread-thought__preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.thread-thought__caret,
+.thread-run__caret {
+  color: var(--dim);
+  font-style: normal;
+  flex: none;
+  width: 1em;
+}
+.thread-thought__body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-style: italic;
+  color: var(--muted);
+  padding: 2px 0 4px 1.6em;
+}
+
+.thread-run { font-family: var(--mono); font-size: 12px; min-width: 0; }
+.thread-run__head { color: var(--muted); }
+.thread-run__head:hover .thread-run__summary { color: var(--teal); }
+.thread-run__summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.thread-run__failed { color: var(--red); flex: none; }
+.thread-run:not(.thread-run--active) .thread-run__spinner { display: none; }
+.thread-run--active .thread-run__caret { display: none; }
+.thread-run__caption {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--dim);
+  padding-left: 1.6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-run__caption[hidden] { display: none; }
+.thread-run__items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 2px 0.45em;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+.thread-run__missing { color: var(--dim); }
+
+.thread-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border: 2px solid var(--border-2);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: thread-spin 0.8s linear infinite;
+}
+@keyframes thread-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .thread-spinner { animation: none; } }
+.thread-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  padding: 2px 0 6px;
 }
 
 /* message bubbles */
@@ -3009,131 +2956,6 @@ body::before {
   -webkit-overflow-scrolling: touch;
 }
 
-@media (max-width: 720px) {
-  /* prevent iOS auto-zoom on form fields. */
-  .composer-input,
-  .inp,
-  input[type="text"],
-  input[type="number"],
-  input[type="search"],
-  input[type="url"],
-  textarea,
-  select {
-    font-size: 16px;
-  }
-
-  /* hamburger visible on narrow */
-  .hamburger { display: flex; }
-
-  /* sidebar becomes an off-canvas drawer. Dashboard stays a flex column
-     so the chat pane keeps filling the viewport and the composer stays
-     pinned at the bottom on mobile too. */
-  .dashboard {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-  }
-  .sidebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: min(82vw, 320px);
-    /* well above .drawer-backdrop (z-index 30) and the install banner */
-    z-index: 40;
-    transform: translateX(-100%);
-    transition: transform 0.22s ease;
-    border-right: 1px solid var(--border);
-    border-bottom: none;
-    max-height: none;
-    padding-top: calc(14px + env(safe-area-inset-top));
-    padding-bottom: calc(14px + env(safe-area-inset-bottom));
-    overflow-y: auto;
-    /* fully opaque so the dimmed backdrop never bleeds through */
-    background: var(--bg-soft);
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
-  }
-  body[data-drawer-open] .sidebar { transform: translateX(0); }
-  body:not([data-drawer-open]) .drawer-backdrop { display: none; }
-
-  .main-pane { width: 100%; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-
-  /* tap targets >= 44 px */
-  .btn,
-  .topbar-btn,
-  .tab,
-  .agents-new-btn,
-  .agent-item,
-  #install-banner button {
-    min-height: 44px;
-  }
-  .agent-kill { min-width: 44px; min-height: 44px; }
-
-  /* Composer height: smaller on mobile to leave room for the chat above,
-     but still strictly fixed (no resize handle, no grow on focus). */
-  .composer-input { height: 72px; min-height: 72px; max-height: 72px; }
-  .composer-actions { flex-wrap: wrap; }
-
-  /* Tabs row: allow the action buttons (disconnect / copy convo) to wrap
-     under the tabs when the row is too narrow. */
-  .tabs { flex-wrap: wrap; row-gap: 6px; padding-right: 10px; }
-  .tabs-spacer { flex: 1 1 auto; min-width: 8px; }
-  .tab-action { padding: 5px 8px; font-size: 11px; }
-
-  /* Slim brand on mobile: only the "GR" mark stays visible.
-     Save horizontal space for the hamburger + status pill. */
-  .brand-name,
-  .brand-version { display: none; }
-
-  /* Show the close-drawer button on mobile. */
-  .sidebar-close { display: inline-block; }
-
-  /* The hamburger nudges the search/sort row a bit on narrow screens */
-  .sidebar-tools {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-  .sidebar-sort { max-width: none; width: 100%; }
-  .sidebar-search-input { font-size: 16px; padding: 8px 28px 8px 10px; }
-
-  /* Composer extras row: pills + attach button + send/cancel never overflow */
-  .composer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)) 10px; }
-
-  /* Bigger, more readable type on phones. The desktop palette uses 14 px
-     body / 11-13 px chrome which feels cramped on a 6 inch screen. Bump
-     base text and the dense info rows; keep tiny chrome (icons, status
-     pills) the same since they're glyphs, not reading text. */
-  html, body         { font-size: 16px; }
-  .chat-stream       { font-size: 15px; line-height: 1.55; }
-  .agent-name        { font-size: 15px; }
-  .agent-item-meta   { font-size: 12.5px; }
-  .agent-status      { font-size: 12.5px; }
-  .agent-link        { font-size: 12.5px; }
-  .agent-cwd         { font-size: 11px; }
-  .tab               { font-size: 13px; padding: 8px 12px; }
-  .tab-action        { font-size: 12px; }
-  .chat-status       { font-size: 13px; min-height: 36px; }
-  .info-k, .info-v   { font-size: 13px; }
-  .tool-pill__label  { font-size: 12px; }
-  .tool-pill__status { font-size: 10px; }
-  .chip              { font-size: 12px; }
-  .files-row-name    { font-size: 14px; }
-  .files-row-size    { font-size: 12px; }
-  .composer-hint     { font-size: 12px; }
-
-  /* tool pills + info grid stack on narrow */
-  .tool-pill__head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-  }
-  .tool-pill__label {
-    flex: 1 1 100%;
-    order: 5; /* push the label below the caret/kind/status row */
-  }
   .info-grid {
     grid-template-columns: 1fr;
     gap: 4px 0;
@@ -8138,109 +7960,6 @@ body::before {
   .update-modal { padding: 8px; }
   .update-modal__card { max-height: 92vh; }
   .update-step__label { min-width: 110px; }
-}
-
-/* ── chat tools column: tabs + fullscreen toggle ─────────────────────── */
-
-.chat-tools-col__tabs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.chat-tools-col__spacer { flex: 1 1 auto; }
-
-.chat-tools-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--muted);
-  border-radius: 5px;
-  padding: 3px 8px;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-weight: 600;
-  cursor: pointer;
-  line-height: 1;
-  transition: color 80ms ease, background 80ms ease, border-color 80ms ease;
-}
-.chat-tools-tab:hover {
-  color: var(--text);
-  border-color: var(--border-2);
-}
-.chat-tools-tab--active {
-  color: var(--teal);
-  background: rgba(94, 234, 212, 0.06);
-  border-color: rgba(94, 234, 212, 0.25);
-}
-.chat-tools-tab__ico {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 12px;
-  height: 12px;
-}
-.chat-tools-tab__ico svg { width: 12px; height: 12px; }
-
-.chat-tools-col__icon-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  border-radius: 4px;
-  padding: 2px 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  line-height: 1;
-  margin-right: 4px;
-}
-.chat-tools-col__icon-btn:hover {
-  color: var(--teal);
-  border-color: var(--teal);
-}
-.chat-tools-col__icon-btn svg { width: 13px; height: 13px; }
-
-/* Files panel embedded in the tools column. Same shell as the
-   tools stream so the underlying mountFilesTab component (which sets
-   its own scroll + layout) fits without extra adjustments. */
-.chat-tools-files {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.chat-tools-files > * { flex: 1 1 auto; min-height: 0; }
-
-/* The `hidden` HTML attribute defaults to `display: none`, but the
-   `.chat-tools-stream` rule above sets `display: flex` which wins on
-   specificity. Force the hide here so only one tab content renders at
-   a time. */
-.chat-tools-stream[hidden],
-.chat-tools-files[hidden] { display: none !important; }
-
-/* Full-screen mode: hide the chat stream, drop the Split.js gutter,
-   and let the tools column take the full chat-split width. The CSS
-   wins over Split.js's inline flex-basis thanks to !important. */
-.chat-split--tools-fullscreen > .chat-stream { display: none; }
-.chat-split--tools-fullscreen > .gutter { display: none; }
-.chat-split--tools-fullscreen > .chat-tools-col {
-  flex: 1 1 100% !important;
-  width: 100% !important;
-  max-width: 100% !important;
-  border-left: none;
-}
-
-@media (max-width: 720px) {
-  /* Mobile: fullscreen has no meaning since the layout is stacked.
-     Hide the toggle so it doesn't dangle as a dead button. */
-  .chat-tools-col__fullscreen { display: none; }
-  .chat-tools-tab__lbl { display: none; }
-  .chat-tools-tab { padding: 4px 6px; }
 }
 
 /* ── changelog modal ─────────────────────────────────────────────────── */

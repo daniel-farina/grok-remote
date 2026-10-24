@@ -214,7 +214,6 @@ function mountDashboard(): void {
   shell.appendChild(splitHost);
 
   installOuterSplit(splitHost, sidebarPane, mainPane);
-  installToolsToggle();
 
   const settingsBtn = document.getElementById('open-settings');
   if (settingsBtn) {
@@ -392,32 +391,6 @@ function readSidebarSizes(): [number, number] {
 
 function isSidebarCollapsed(): boolean {
   try { return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'; } catch { return false; }
-}
-
-function installToolsToggle(): void {
-  const btn = document.getElementById('topbar-sidebar-right') as HTMLElement | null;
-  if (!btn) return;
-  if (isMobileViewport()) {
-    btn.hidden = true;
-    return;
-  }
-  btn.hidden = false;
-  let collapsed = false;
-  function paint(): void {
-    btn!.innerHTML = iconHtml(collapsed ? 'panel-right-open' : 'panel-right-close');
-    btn!.title = collapsed ? 'show tool calls panel' : 'hide tool calls panel';
-    btn!.setAttribute('aria-label', btn!.title);
-  }
-  paint();
-  btn.addEventListener('click', (ev) => {
-    ev.preventDefault();
-    document.dispatchEvent(new CustomEvent('grok-remote:tools-toggle'));
-  });
-  document.addEventListener('grok-remote:tools-state', (ev: Event) => {
-    const ce = ev as CustomEvent<{ collapsed?: boolean }>;
-    collapsed = !!(ce && ce.detail && ce.detail.collapsed);
-    paint();
-  });
 }
 
 function installOuterSplit(splitHost: HTMLElement, sidebarPane: HTMLElement, mainPane: HTMLElement): void {

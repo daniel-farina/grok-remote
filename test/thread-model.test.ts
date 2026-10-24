@@ -175,3 +175,24 @@ test('runIsActive tracks pending and running tools', () => {
   assert.equal(runIsActive([T('execute', 'Completed'), T('read', 'Failed')]), false);
   assert.equal(runFailedCount([T('execute', 'Failed'), T('read', 'Failed'), T('read')]), 2);
 });
+
+test('TodoWrite details arriving on an update turn the tool into the plan', () => {
+  const bare: Ev = ['tool_call', upd('tool_call', { toolCallId: 'p1', kind: 'think', status: 'pending', title: 'Updating plan' })];
+  const filled: Ev = ['tool_call_update', upd('tool_call_update', { toolCallId: 'p1', status: 'completed',
+    rawInput: { variant: 'TodoWrite', merge: false, todos: [] } })];
+  const { model, changes } = run([user('hi'), bare, filled]);
+  const segs = lastTurn(model).segments;
+  assert.deepEqual(types(segs), ['user', 'plan']);
+  assert.equal(model.runOf('p1'), undefined);
+  assert.equal(model.planOf('p1')?.id, segs[1]!.id);
+  assert.ok(changes[2]!.removed.length === 1);
+});
+
+test('prompt_result token counts fill the turn footer', () => {
+  const { model, changes } = run([user('hi'), msg('a'), complete(),
+    ['prompt_result', { stopReason: 'end_turn', _meta: { totalTokens: 150003, inputTokens: 1489, outputTokens: 26 } }]]);
+  const footer = lastTurn(model).segments.find((s) => s.type === 'footer') as Extract<Segment, { type: 'footer' }>;
+  assert.equal(footer.meta.inputTokens, 1489);
+  assert.equal(footer.meta.outputTokens, 26);
+  assert.ok(changes[3]!.updated.includes(footer.id));
+});

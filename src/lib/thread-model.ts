@@ -32,7 +32,7 @@ export type Segment =
   | { id: string; type: 'footer'; meta: Record<string, unknown> };
 
 export type RunSegment = Extract<Segment, { type: 'run' }>;
-type PlanSegment = Extract<Segment, { type: 'plan' }>;
+export type PlanSegment = Extract<Segment, { type: 'plan' }>;
 
 export interface Turn { id: string; segments: Segment[]; running: boolean; background: boolean }
 
@@ -79,6 +79,7 @@ export class ThreadModel {
 
   segment(id: string): Segment | undefined { return this.byId.get(id); }
   runOf(toolCallId: string): RunSegment | undefined { return this.runByTool.get(toolCallId); }
+  planOf(toolCallId: string): PlanSegment | undefined { return this.planByTool.get(toolCallId); }
   activeTurn(): Turn | null { return this.turns[this.turns.length - 1] || null; }
   isRunning(): boolean { return this.running; }
 
@@ -98,6 +99,7 @@ export class ThreadModel {
       case 'tool_call_update': this.onTool(data as ToolPayload, ch); break;
       case 'tool_call_delta_chunk': this.onDelta(data as ToolPayload, ch); break;
       case 'prompt_complete': this.onComplete(payload, data, ch); break;
+      case 'prompt_result': this.onResult(payload, ch); break;
       case 'agent_status': this.onStatus(data, ch); break;
       case 'error': this.onNote('error', data, ch); break;
       case 'session_summary_generated': this.onNote('compacted', data, ch); break;
@@ -275,7 +277,27 @@ export class ThreadModel {
     this.runByTool.set(id, run);
   }
 
+  /** Drop a tool that turned out to be a TodoWrite from the run it was first filed in. */
+  private detachFromRun(id: string, ch: ModelChange): void {
+    const run = this.runByTool.get(id);
+    if (!run) return;
+    this.runByTool.delete(id);
+    run.items = run.items.filter((i) => !(i.type === 'tool' && i.toolCallId === id));
+    const owner = this.turns.find((t) => t.segments.includes(run));
+    if (!owner) return;
+    if (run.items.some((i) => i.type === 'tool')) { this.touch(owner, run.id, ch); return; }
+    // Nothing but thoughts left: put them back as top-level thoughts.
+    const at = owner.segments.indexOf(run);
+    const thoughts: Segment[] = run.items.map((i) => ({ id: (i as RunThought).id, type: 'thought', text: (i as RunThought).text }));
+    owner.segments.splice(at, 1, ...thoughts);
+    this.byId.delete(run.id);
+    ch.removed.push(run.id);
+    for (const t of thoughts) { this.byId.set(t.id, t); ch.added.push(t.id); }
+    ch.turnId = owner.id;
+  }
+
   private onPlan(id: string, data: ToolPayload, known: PlanSegment | undefined, ch: ModelChange): void {
+    this.detachFromRun(id, ch);
     const merge = !!(data.rawInput && data.rawInput.merge);
     const target = known || (merge ? this.currentPlan : null);
     if (target) {
@@ -312,6 +334,16 @@ export class ThreadModel {
     this.closeRun(turn, ch);
     this.add(turn, { id: this.nextId(), type: 'footer', meta }, ch);
     this.endTurn(turn, ch);
+  }
+
+  /** Token counts arrive in prompt_result just after prompt_complete: merge them into the footer. */
+  private onResult(payload: unknown, ch: ModelChange): void {
+    const turn = this.activeTurn();
+    const footer = turn && [...turn.segments].reverse().find((s) => s.type === 'footer');
+    const meta = payload && typeof payload === 'object' ? (payload as Record<string, unknown>)._meta : null;
+    if (!turn || !footer || footer.type !== 'footer' || !meta || typeof meta !== 'object') return;
+    footer.meta = { ...footer.meta, ...(meta as Record<string, unknown>) };
+    this.touch(turn, footer.id, ch);
   }
 
   private onStatus(data: Record<string, unknown>, ch: ModelChange): void {

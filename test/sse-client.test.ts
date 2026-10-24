@@ -63,10 +63,20 @@ test('openStream constructs an EventSource with the given URL', () => {
 test('openStream registers onOpen, onError, message, and each known event', () => {
   fresh();
   const h = openStream('/x', { onOpen: () => {}, onError: () => {} });
-  // open + error + message + every entry in KNOWN_EVENTS (11) = 14 listeners.
+  // open + error + message + every entry in KNOWN_EVENTS (14) = 17 listeners.
   const names = Array.from(lastInstance!.listeners.keys()).sort();
   // Spot-check a representative subset (the implementation iterates KNOWN_EVENTS).
   for (const n of ['open', 'error', 'message', 'tool_call', 'tool_call_update', 'tool_call_delta_chunk', 'agent_status', 'prompt_complete']) {
+    assert.ok(names.includes(n), `expected listener for ${n}; got ${names.join(',')}`);
+  }
+  h.close();
+});
+
+test('openStream listens for user messages and prompt results', () => {
+  fresh();
+  const h = openStream('/x');
+  const names = Array.from(lastInstance!.listeners.keys());
+  for (const n of ['user_message', 'user_message_chunk', 'prompt_result']) {
     assert.ok(names.includes(n), `expected listener for ${n}; got ${names.join(',')}`);
   }
   h.close();

@@ -11,7 +11,6 @@
 // Plus: available_commands_update, session_summary_generated,
 //       _x.ai/session_notification (toast), error (red banner).
 
-import Split from 'split.js';
 import { api } from '../lib/api';
 import { openStream } from '../lib/sse';
 import { mountFilesTab, unmountFilesTab } from './files';
@@ -19,31 +18,19 @@ import { mountTraceTab, unmountTraceTab } from './trace';
 import { mountScoped as mountFlowTab, unmount as unmountFlowTab } from './system/flow';
 import attachSlashPalette from '../lib/slash-palette';
 import { setupImageAttach } from '../lib/attach-images';
-import {
-  el,
-  renderUserBubble,
-  renderAssistantBubble,
-  renderThinkingPane,
-  renderToolCard,
-  renderTodoWriteCard,
-  isTodoWriteToolCall,
-  renderTokenFooter,
-  renderCompactedPill,
-  renderErrorBanner,
-  renderToast,
-} from '../lib/render';
-import { unwrap, extractText } from '../lib/acp-payload.js';
+import { el, renderToast } from '../lib/render';
+import { unwrap } from '../lib/acp-payload.js';
 import { copyToClipboard, serializeConversation, serializeResumeCommand } from '../lib/copy';
+import { ThreadModel } from '../lib/thread-model';
+import { ThreadRenderer } from '../lib/thread-render';
+import { EventDedup } from '../lib/event-dedup';
 import { iconHtml } from '../lib/icons';
 import { fmtTokens } from '../lib/format';
 import { playIntro } from '../lib/intro-animation';
 
 export class ChatView {
-  static _toolsToggleWired: any;
   static _active: any;
-  _activeTodoCard!: any;
   _autoScroll!: any;
-  _autoScrollTools!: any;
   _bgListViewerEl!: any;
   _bgTermsByCard!: any;
   _bgTermsTimer!: any;
@@ -51,25 +38,17 @@ export class ChatView {
   _bgTermViewerTimer!: any;
   _chatIntroAbort!: any;
   _chatIntroEl!: any;
-  _chatSplit!: any;
-  _chatSplitBuild!: any;
-  _chatSplitCollapsed!: any;
-  _chatSplitLastSizes!: any;
   _convoSkills!: any;
   _detachAutoScroll!: any;
   _detachPalette!: any;
   _easedScrollPending!: any;
   _easedScrollRaf!: any;
   _easedScrollTarget!: any;
-  _easedToolsRaf!: any;
-  _easedToolsTarget!: any;
+  _userScrollIntentAt!: number;
   _historyAll!: any;
-  _inFlightMap!: any;
-  _inFlightTimer!: any;
   _isReplaying!: any;
   _jumpToLatestBtn!: any;
   _knownSkills!: any;
-  _lastEasedToolsWrite!: any;
   _lastEasedWrite!: any;
   _lastEventTs!: any;
   _lastPayload!: any;
@@ -81,7 +60,6 @@ export class ChatView {
   _onSettingsChange!: any;
   _onVisibility!: any;
   _payloadModal!: any;
-  _pendingTodoSeed!: any;
   _promptCapImage!: any;
   _scrollRaf!: any;
   _sdDirty!: any;
@@ -91,17 +69,12 @@ export class ChatView {
   _sdNotice!: any;
   _skillCommands!: any;
   _skillsPromise!: any;
-  _splitFullscreenBtn!: any;
   _splitToggleBtn!: any;
-  _toolsColFullscreen!: any;
-  _toolsColTab!: any;
-  _toolsFilesMounted!: any;
   _toolsTabBtns!: any;
   activeTurn!: any;
   agentId!: any;
   availableCommands!: any;
   bgTermsStripEl!: any;
-  chatSplitEl!: any;
   composerAttachBtn!: any;
   composerCancel!: any;
   composerDebugBtn!: any;
@@ -121,7 +94,6 @@ export class ChatView {
   flowPane!: any;
   imageAttach!: any;
   inflightPill!: any;
-  inFlightStripEl!: any;
   infoPane!: any;
   latestTotalTokens!: any;
   palette!: any;
@@ -138,18 +110,15 @@ export class ChatView {
   tabsState!: any;
   toastHost!: any;
   tokensPill!: any;
-  toolsColEl!: any;
-  toolsFilesPaneEl!: any;
-  toolsStreamEl!: any;
   traceMounted!: any;
   tracePane!: any;
-  turns!: any;
+  model!: ThreadModel;
+  thread!: ThreadRenderer;
+  _seenEvents = new EventDedup();
 
   constructor() {
     this.agentId = null;
     this.stream  = null;
-    this.turns   = []; // each: { user, thinking, tools[], assistant, footer, root }
-    this.activeTurn = null;
     this.availableCommands = [];
     this.tabsState = 'conversation';
 
@@ -161,15 +130,14 @@ export class ChatView {
     this._skillsPromise = null;
 
     this.streamEl  = el('div', { class: 'chat-stream' });
-    this.toolsColEl = el('div', { class: 'chat-tools-col' });
-    this.toolsStreamEl = el('div', { class: 'chat-tools-stream' });
-    // Files preview panel that lives inside the tools column. Mounted
-    // lazily when the user switches the in-column tab to "files".
-    this.toolsFilesPaneEl = el('div', { class: 'chat-tools-files', hidden: true });
-    this._toolsColTab = this._readToolsColTab();
-    this._toolsColFullscreen = this._readToolsColFullscreen();
-    this._toolsFilesMounted = false;
-    this._buildToolsColHeader();
+    this.model = new ThreadModel();
+    this.thread = new ThreadRenderer({
+      container: this.streamEl,
+      model: this.model,
+      agentId: () => this.agentId,
+      animate: () => !this._isReplaying,
+      onExpand: (node) => this._pauseFollowAfterExpand(node),
+    });
     this.composerEl = this.buildComposer();
     this.tabsEl    = this.buildTabs();
     this.statusEl  = el('div', { class: 'chat-status' });
@@ -226,13 +194,6 @@ export class ChatView {
     this._chatIntroAbort = null;
     this._chatIntroEl    = null;
 
-    // Strip pinned above the chat stream that lists tool calls currently
-    // in flight. Each chip shows kind + label + live duration; clicking
-    // scrolls to that tool's pill in the conversation. Hidden when empty.
-    this.inFlightStripEl = el('div', { class: 'inflight-strip', hidden: true });
-    this._inFlightMap = new Map(); // toolCallId -> { kind, label, startedAt, chip }
-    this._inFlightTimer = null;
-
     // Background terminals strip: lists long-running shells launched by the
     // agent ([bg] tool calls). Click a chip to view live output. Polls the
     // /api/agents/:id/terminals endpoint every 2s while an agent is selected.
@@ -253,11 +214,7 @@ export class ChatView {
           this.statusEl,
           this.bgTermsStripEl,
           this.convoSkillsStripEl,
-          this.inFlightStripEl,
-          this.chatSplitEl = el('div', { class: 'chat-split' },
-            this.streamEl,
-            this.toolsColEl,
-          ),
+          this.streamEl,
           this.composerEl,
         ),
         this.filesPane,
@@ -306,33 +263,10 @@ export class ChatView {
 
   mount(parent: any) {
     parent.appendChild(this.root);
-    // Split.js needs the panes to actually be in the DOM to read sizes,
-    // so we init the inner chat split here, not in the constructor.
-    // Tear down any previous instance first (mount is re-entrant when the
-    // user navigates between routes).
-    this._destroyChatSplit();
-    this._initChatSplit();
-    // External topbar button toggles tools panel via this event. Keep one
-    // listener for the document lifetime by guarding with a flag.
-    if (!ChatView._toolsToggleWired) {
-      document.addEventListener('grok-remote:tools-toggle', () => {
-        // Ask the active ChatView to toggle; we walk to the one mounted.
-        // Simplest path: dispatch a DOM event from the toggle btn the
-        // chat view already owns. Use a custom hook on the class.
-        if (ChatView._active) ChatView._active._toggleToolsCol();
-      });
-      ChatView._toolsToggleWired = true;
-    }
     ChatView._active = this;
-    // Initial state push so the topbar button paints correctly right after
-    // mount, before any user toggle happens.
-    document.dispatchEvent(new CustomEvent('grok-remote:tools-state', {
-      detail: { collapsed: !!this._chatSplitCollapsed },
-    }));
   }
 
   destroy() {
-    this._destroyChatSplit();
     this.closeStream();
     this._cancelChatIntro();
     if (this.filesMounted) {
@@ -349,7 +283,6 @@ export class ChatView {
     }
     if (this._detachPalette) { try { this._detachPalette(); } catch { /* ignore */ } this._detachPalette = null; }
     if (this._detachAutoScroll) { try { this._detachAutoScroll(); } catch { /* ignore */ } this._detachAutoScroll = null; }
-    if (this._inFlightTimer) { try { clearInterval(this._inFlightTimer); } catch { /* ignore */ } this._inFlightTimer = null; }
     this._stopBgTerminalsPolling();
     if (this.imageAttach) { try { this.imageAttach.destroy(); } catch { /* ignore */ } this.imageAttach = null; }
     document.removeEventListener('visibilitychange', this._onVisibility);
@@ -547,7 +480,11 @@ export class ChatView {
       this.showToast('no agent selected', 'warn');
       return;
     }
-    const text = serializeConversation(this.turns, { agent: this.currentAgent || { id: this.agentId } });
+    const turns = this.model.turns.map((t: any) => ({
+      userText: (t.segments.find((s: any) => s.type === 'user') || {}).text || '',
+      assistant: { text: t.segments.filter((s: any) => s.type === 'message').map((s: any) => s.text).join('\n\n') },
+    }));
+    const text = serializeConversation(turns, { agent: this.currentAgent || { id: this.agentId } });
     const ok = await copyToClipboard(text);
     if (ok) {
       this.flashBtnLabel(this.copyConvoBtn, 'copied');
@@ -584,12 +521,6 @@ export class ChatView {
       if (this.agentId) {
         mountFilesTab(this.filesPane, { id: this.agentId });
         this.filesMounted = true;
-        // The Files singleton just moved into the top-bar pane; clear the
-        // tools-column's stale shell so it doesn't look duplicated.
-        if (this._toolsFilesMounted) {
-          this._toolsFilesMounted = false;
-          if (this.toolsFilesPaneEl) this.toolsFilesPaneEl.replaceChildren();
-        }
       } else if (!this.filesMounted) {
         this.filesPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       }
@@ -640,9 +571,6 @@ export class ChatView {
   // tab or a wide tools column from a previous agent.
   focusConversation() {
     this.switchTab('conversation');
-    if (!this._isChatMobile() && !this._chatSplitCollapsed) {
-      this._toggleToolsCol();
-    }
   }
 
   // Back-compat alias for older call sites. New code should use
@@ -908,9 +836,8 @@ export class ChatView {
     this.closeStream();
     this._cancelChatIntro();
     this.streamEl.replaceChildren();
-    if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
-    this.turns = [];
-    this.activeTurn = null;
+    this.model.reset();
+    this.thread.clear();
     // Fire-and-forget skill cache warmup so the banner can paint as soon
     // as a /name message lands. Harmless if the agent has none.
     this._loadSkills();
@@ -932,13 +859,6 @@ export class ChatView {
       unmountFilesTab();
       this.filesMounted = false;
     }
-    // Tools-column files view shares the same singleton as the top-bar
-    // Files tab. Unmount before remounting against the new agent.
-    if (this._toolsFilesMounted) {
-      unmountFilesTab();
-      this._toolsFilesMounted = false;
-      if (this.toolsFilesPaneEl) this.toolsFilesPaneEl.replaceChildren();
-    }
     if (this.traceMounted) {
       unmountTraceTab();
       this.traceMounted = false;
@@ -956,11 +876,6 @@ export class ChatView {
       this.streamEl.appendChild(this.empty);
       this.infoPane.replaceChildren(el('div', { class: 'pane-empty' }, 'no agent selected'));
       this.filesPane.replaceChildren();
-      if (this.toolsFilesPaneEl && this._toolsColTab === 'files') {
-        this.toolsFilesPaneEl.replaceChildren(
-          el('div', { class: 'pane-empty' }, 'no agent selected'),
-        );
-      }
       this._setComposerEnabled(false);
       // Hide the star + connect buttons until an agent is loaded.
       if (this.starBtn)     this.starBtn.hidden = true;
@@ -977,8 +892,6 @@ export class ChatView {
 
     const switchingAgent = this.agentId !== agent.id;
     if (switchingAgent) {
-      this._clearAllInFlight();
-      this._activeTodoCard = null;
       this._stopBgTerminalsPolling();
       this._convoSkills = new Map();
       this._renderConvoSkillsStrip();
@@ -1000,13 +913,6 @@ export class ChatView {
       this.filesMounted = true;
     }
 
-    // If the tools-column files tab is active, rebind it to the new agent's
-    // files. _applyToolsColTab handles the unmount/mount via the shared
-    // singleton.
-    if (this._toolsColTab === 'files') {
-      this._applyToolsColTab();
-    }
-
     const agentIdAtCall = agent.id;
     this.refreshHistory()
       .catch((e) => this.showStatus(`history load failed: ${e.message}`, 'warn'))
@@ -1018,8 +924,7 @@ export class ChatView {
         // the intro on top of an SSE event that raced in.
         if (
           this.agentId === agentIdAtCall &&
-          (!this.turns || this.turns.length === 0) &&
-          !this.activeTurn &&
+          this.model.turns.length === 0 &&
           !this._chatIntroAbort
         ) {
           this._playChatIntro();
@@ -1035,7 +940,7 @@ export class ChatView {
   // When a brand-new conversation is opened (zero turns), play the
   // hole-to-GR figlet inside the chat-stream as a welcome moment. The
   // animation cancels the moment the user sends a message or an SSE
-  // chunk lands (both flow through startTurn), or the user switches to
+  // chunk lands (both start a new turn), or the user switches to
   // another agent.
 
   _playChatIntro() {
@@ -1241,9 +1146,9 @@ export class ChatView {
       const hist: any = await api.history(this.agentId, { turns, all });
       const events: any[] = (hist && Array.isArray(hist.events)) ? hist.events : [];
       this.streamEl.replaceChildren();
-      if (this.toolsStreamEl) this.toolsStreamEl.replaceChildren();
-      this.turns = [];
-      this.activeTurn = null;
+      this.model.reset();
+      this.thread.clear();
+      this._seenEvents.reset();
       // If there are older turns we didn't load, show a banner at the top.
       const total = (hist && hist.totalTurns) || 0;
       const returned = (hist && hist.returnedTurns) || 0;
@@ -1254,29 +1159,24 @@ export class ChatView {
       try {
         for (const ev of events) {
           const name = ev.event || ev.type || ev.name;
+          this._seenEvents.markSeen(ev.eventId);
           const data = ev.data || ev.payload || ev;
           if (!name) continue;
           // Stash event timestamp so bubble renders pick up the real time
           // rather than "now" during a history replay.
           const t = Date.parse(ev.at);
-          if (Number.isFinite(t)) this._lastEventTs = t;
+          if (Number.isFinite(t)) { this._lastEventTs = t; this._seenEvents.setCutoff(t); }
           this.handleEvent(name, data, { fromHistory: true });
         }
       } finally {
         this._isReplaying = false;
       }
       this._lastEventTs = null;
-      // History replay may end with an unterminated turn (interrupted session,
-      // or a prompt_complete that never made it to disk). Walk every turn and
-      // finalize any thinking pane that is still in its active/blinking state
-      // so the dots stop animating. Then close out the final active turn so
-      // the assistant bubble is finalized too.
-      for (const turn of this.turns) {
-        if (turn.thinking && typeof turn.thinking.finalize === 'function') {
-          turn.thinking.finalize();
-        }
-      }
-      if (this.activeTurn) this.endTurn(null);
+      // agent_status running/idle is live-only (never stored in history), so
+      // tell the model the agent's current state. An interrupted turn whose
+      // agent is no longer running is closed off instead of spinning forever.
+      const st = this.currentAgent && this.currentAgent.status;
+      if (st) this.handleEvent('agent_status', { status: st }, { fromHistory: true });
       // Scroll the stream to the bottom after a history load. Reset
       // auto-scroll: the user just opened the conversation, they want to be
       // at the latest message regardless of where the last session ended.
@@ -1309,7 +1209,12 @@ export class ChatView {
     this.stream = openStream(`/api/agents/${encodeURIComponent(this.agentId)}/stream`, {
       onOpen:  () => this.showStatus('connected', 'ok'),
       onError: () => this.showStatus('stream error · reconnecting', 'warn'),
-      onAny:   (name, data) => this.handleEvent(name, data),
+      // The server resends its recent-event buffer on a fresh connect; skip
+      // anything history already drew.
+      onAny:   (name, data, ev) => {
+        if (this._seenEvents.isDuplicate(ev && ev.lastEventId)) return;
+        this.handleEvent(name, data);
+      },
     });
   }
 
@@ -1337,57 +1242,6 @@ export class ChatView {
   }
 
   // ── turn machinery ───────────────────────────────────────────────────
-
-  ensureTurn() {
-    if (this.activeTurn) return this.activeTurn;
-    return this.startTurn('', { ts: this._lastEventTs || Date.now() });
-  }
-
-  startTurn(userText: any, opts?: any) {
-    // A turn is about to land in the stream. Cancel the welcome animation
-    // if it's still running so the figlet doesn't overlap the new bubble.
-    this._cancelChatIntro();
-    const ts = (opts && opts.ts) || Date.now();
-    const attachments = Array.isArray(opts && opts.attachments) ? opts.attachments : [];
-    const userBubble = renderUserBubble(userText, ts, {
-      attachments,
-      agentId: this.agentId,
-    });
-    // Only animate fresh insertions, never historical replay (that would
-    // produce a chaotic shimmer across all replayed turns).
-    const animate = !this._isReplaying && !(opts && opts.fromHistory);
-    const classes = animate ? 'turn turn--enter' : 'turn';
-    const root = el('div', { class: classes }, userBubble);
-    this.streamEl.appendChild(root);
-    const turn = {
-      user:      userBubble,
-      userText:  userText || '',
-      userAttachments: attachments,
-      thinking:  null,
-      tools:     [],
-      assistant: null,
-      footer:    null,
-      root,
-    };
-    this.turns.push(turn);
-    this.activeTurn = turn;
-    // Decorate retroactively once the skill set is loaded. Idempotent.
-    this._decorateSkill(turn);
-    this.scrollToBottom();
-    return turn;
-  }
-
-  endTurn(meta: any) {
-    if (!this.activeTurn) return;
-    if (this.activeTurn.thinking) this.activeTurn.thinking.finalize();
-    if (this.activeTurn.assistant) this.activeTurn.assistant.finalize();
-    const footer = renderTokenFooter(meta || {});
-    this.activeTurn.root.appendChild(footer);
-    this.activeTurn.footer = footer;
-    this.activeTurn = null;
-    this.composerCancel.disabled = true;
-    this.scrollToBottom();
-  }
 
   scrollToBottom(opts?: any) {
     // Stay pinned to the bottom only when the user hasn't scrolled away.
@@ -1487,363 +1341,23 @@ export class ChatView {
     this._easedScrollRaf = requestAnimationFrame(tick);
   }
 
-  // Eased follow for the tools column. Mirrors scrollToBottom() above but
-  // for this.toolsStreamEl. Cheaper because the tools column doesn't use
-  // content-visibility so scrollHeight is always accurate.
-  _scrollToolsToBottom(opts?: any) {
-    if (!this.toolsStreamEl) return;
-    const force = !!(opts && opts.force);
-    if (!force && this._autoScrollTools === false) return;
-    if (force) {
-      this.toolsStreamEl.scrollTop = this.toolsStreamEl.scrollHeight;
-      this._lastEasedToolsWrite = this.toolsStreamEl.scrollTop;
-      this._easedToolsTarget = this.toolsStreamEl.scrollTop;
-      return;
-    }
-    if (typeof document !== 'undefined' && document.hidden) {
-      this.toolsStreamEl.scrollTop = this.toolsStreamEl.scrollHeight;
-      this._lastEasedToolsWrite = this.toolsStreamEl.scrollTop;
-      this._easedToolsTarget = this.toolsStreamEl.scrollTop;
-      return;
-    }
-    if (this._easedToolsRaf) return;
-    const tick = () => {
-      this._easedToolsRaf = 0;
-      if (!this.toolsStreamEl || !this.toolsStreamEl.isConnected) return;
-      if (this._autoScrollTools === false) return;
-      const el = this.toolsStreamEl;
-      const target = Math.max(0, el.scrollHeight - el.clientHeight);
-      this._easedToolsTarget = target;
-      const current = el.scrollTop;
-      const delta = target - current;
-      if (Math.abs(delta) <= 1) {
-        el.scrollTop = target;
-        this._lastEasedToolsWrite = target;
-        return;
-      }
-      const next = current + delta * 0.22;
-      el.scrollTop = next;
-      this._lastEasedToolsWrite = next;
-      this._easedToolsRaf = requestAnimationFrame(tick);
-    };
-    this._easedToolsRaf = requestAnimationFrame(tick);
-  }
-
-  // Build the header for the tools column. The header has two segmented
-  // tab buttons (tools/files), a spacer, then a full-screen toggle and the
-  // existing collapse toggle. The actual Split.js instance is created in
-  // _initChatSplit() from mount(), after the elements are in the DOM.
-  _buildToolsColHeader() {
-    const mkTab = (key: any, label: any, iconName: any) => el('button', {
-      type: 'button',
-      class: `chat-tools-tab${this._toolsColTab === key ? ' chat-tools-tab--active' : ''}`,
-      'data-tab': key,
-      title: label,
-      onclick: () => this._setToolsColTab(key),
-    },
-      el('span', { class: 'chat-tools-tab__ico', innerHTML: iconHtml(iconName) }),
-      el('span', { class: 'chat-tools-tab__lbl' }, label),
-    );
-
-    this._toolsTabBtns = {
-      tools: mkTab('tools', 'tool calls', 'wrench'),
-      files: mkTab('files', 'files',      'folder'),
-    };
-
-    const fullscreen = el('button', {
-      type: 'button',
-      class: 'chat-tools-col__icon-btn chat-tools-col__fullscreen',
-      title: this._toolsColFullscreen ? 'restore tools panel' : 'expand tools panel',
-      onclick: () => this._toggleToolsFullscreen(),
+  // A thought or tool run was opened or closed in place. Keep its header
+  // where it is: if the bottom is now out of view, pause following and
+  // offer "jump to latest" instead of yanking the view on the next chunk.
+  _pauseFollowAfterExpand(_node: HTMLElement) {
+    requestAnimationFrame(() => {
+      const s = this.streamEl;
+      const dist = s.scrollHeight - s.scrollTop - s.clientHeight;
+      if (dist <= 60) return;
+      this._autoScroll = false;
+      if (this._easedScrollRaf) { cancelAnimationFrame(this._easedScrollRaf); this._easedScrollRaf = 0; }
+      if (this._jumpToLatestBtn) this._jumpToLatestBtn.hidden = false;
     });
-    fullscreen.innerHTML = iconHtml(this._toolsColFullscreen ? 'minimize-2' : 'maximize-2');
-    this._splitFullscreenBtn = fullscreen;
-
-    // The collapse-tools control lives on the topbar (right-hand panel
-    // icon) and is the single source of truth. We intentionally do NOT
-    // duplicate it in the column header. _splitToggleBtn is kept on the
-    // instance so other code paths that toggle its `hidden` state on
-    // mobile still work without a null check.
-    this._splitToggleBtn = null;
-
-    const header = el('div', { class: 'chat-tools-col__head' },
-      el('div', { class: 'chat-tools-col__tabs' },
-        this._toolsTabBtns.tools,
-        this._toolsTabBtns.files,
-      ),
-      el('span', { class: 'chat-tools-col__spacer' }),
-      fullscreen,
-    );
-
-    this.toolsColEl.replaceChildren(header, this.toolsStreamEl, this.toolsFilesPaneEl);
-    this._applyToolsColTab();
-  }
-
-  static get CHAT_TOOLS_TAB_KEY()        { return 'grok-remote.split.chat.tab'; }
-  static get CHAT_TOOLS_FULLSCREEN_KEY() { return 'grok-remote.split.chat.fullscreen'; }
-
-  _readToolsColTab() {
-    try {
-      const v = localStorage.getItem(ChatView.CHAT_TOOLS_TAB_KEY);
-      if (v === 'files' || v === 'tools') return v;
-    } catch { /* ignore */ }
-    return 'tools';
-  }
-
-  _readToolsColFullscreen() {
-    try { return localStorage.getItem(ChatView.CHAT_TOOLS_FULLSCREEN_KEY) === '1'; }
-    catch { return false; }
-  }
-
-  _setToolsColTab(key: any) {
-    if (key !== 'tools' && key !== 'files') return;
-    if (this._toolsColTab === key) return;
-    this._toolsColTab = key;
-    try { localStorage.setItem(ChatView.CHAT_TOOLS_TAB_KEY, key); } catch { /* ignore */ }
-    this._applyToolsColTab();
-    // Apply this tab's remembered width to the live Split.js instance.
-    // Skipped when the panel is collapsed (split is destroyed) or
-    // fullscreen (sizes are irrelevant), or on mobile (no split). The
-    // cached _chatSplitLastSizes is kept in sync so the next expand
-    // picks up the right width.
-    if (this._chatSplit && !this._chatSplitCollapsed && !this._toolsColFullscreen
-        && !this._isChatMobile()) {
-      const sizes = this._readChatSplitSizesForTab(key);
-      try { this._chatSplit.setSizes(sizes); } catch { /* ignore */ }
-      this._chatSplitLastSizes = sizes;
-    } else {
-      // Even when we can't apply now, keep the cached "last sizes" in
-      // sync so the next expand or fullscreen-restore uses the right
-      // width for the now-active tab.
-      this._chatSplitLastSizes = this._readChatSplitSizesForTab(key);
-    }
-  }
-
-  _applyToolsColTab() {
-    const key = this._toolsColTab;
-    if (this._toolsTabBtns) {
-      for (const [k, btn] of Object.entries(this._toolsTabBtns)) {
-        (btn as any).classList.toggle('chat-tools-tab--active', k === key);
-      }
-    }
-    if (this.toolsStreamEl)    this.toolsStreamEl.hidden    = key !== 'tools';
-    if (this.toolsFilesPaneEl) this.toolsFilesPaneEl.hidden = key !== 'files';
-    if (key === 'files') {
-      // Reuse the same Files component as the top-bar Files tab. mountFilesTab
-      // is a module-singleton that unmounts any prior mount first, so calling
-      // it here transfers ownership of the file viewer into the tools column.
-      // The top-bar Files pane will appear empty until the user switches back.
-      if (this.agentId) {
-        mountFilesTab(this.toolsFilesPaneEl, { id: this.agentId });
-        this._toolsFilesMounted = true;
-        this.filesMounted = false;
-      } else {
-        this.toolsFilesPaneEl.replaceChildren(
-          el('div', { class: 'pane-empty' }, 'no agent selected'),
-        );
-      }
-    } else if (this._toolsFilesMounted) {
-      unmountFilesTab();
-      this._toolsFilesMounted = false;
-      this.toolsFilesPaneEl.replaceChildren();
-    }
-  }
-
-  _toggleToolsFullscreen() {
-    // Mobile: stacked layout, fullscreen has no meaning since there is no
-    // side-by-side split.
-    if (this._isChatMobile()) return;
-    // Going fullscreen on a collapsed split: expand first so the user has
-    // something to look at. Otherwise toggling fullscreen on a collapsed
-    // column would have no visible effect.
-    if (!this._toolsColFullscreen && this._chatSplitCollapsed) {
-      this._toggleToolsCol();
-    }
-    this._toolsColFullscreen = !this._toolsColFullscreen;
-    try {
-      localStorage.setItem(
-        ChatView.CHAT_TOOLS_FULLSCREEN_KEY,
-        this._toolsColFullscreen ? '1' : '0',
-      );
-    } catch { /* ignore */ }
-    this._applyToolsFullscreenClass();
-    if (this._splitFullscreenBtn) {
-      this._splitFullscreenBtn.innerHTML = iconHtml(
-        this._toolsColFullscreen ? 'minimize-2' : 'maximize-2',
-      );
-      this._splitFullscreenBtn.title = this._toolsColFullscreen
-        ? 'restore tools panel'
-        : 'expand tools panel';
-    }
-  }
-
-  _applyToolsFullscreenClass() {
-    if (!this.chatSplitEl) return;
-    this.chatSplitEl.classList.toggle(
-      'chat-split--tools-fullscreen',
-      !!this._toolsColFullscreen,
-    );
-  }
-
-  // Persisted state keys for the inner chat split. Sizes are stored
-  // per-tab so the user's preferred Files width can differ from their
-  // preferred Tools width (Files defaults to half, Tools to ~30%).
-  static get CHAT_SPLIT_SIZES_KEY()     { return 'grok-remote.split.chat'; }
-  static get CHAT_SPLIT_COLLAPSED_KEY() { return 'grok-remote.split.chat.collapsed'; }
-  static get CHAT_SPLIT_DEFAULT_SIZES() {
-    return { tools: [70, 30], files: [50, 50] };
-  }
-  static get CHAT_SPLIT_MOBILE_MAX()    { return 720; }
-
-  _isValidSizesArray(a: any) {
-    return Array.isArray(a) && a.length === 2 &&
-      a.every((n: any) => typeof n === 'number' && isFinite(n) && n >= 0 && n <= 100);
-  }
-
-  _readAllChatSplitSizes() {
-    const defaults = ChatView.CHAT_SPLIT_DEFAULT_SIZES;
-    try {
-      const raw = localStorage.getItem(ChatView.CHAT_SPLIT_SIZES_KEY);
-      if (!raw) return { ...defaults };
-      const parsed = JSON.parse(raw);
-      // Legacy format: a bare [a, b] from before per-tab sizes existed.
-      // Treat it as the Tools tab's prior preference; keep the new Files
-      // default unless the user has already customized it.
-      if (this._isValidSizesArray(parsed)) {
-        return { ...defaults, tools: parsed };
-      }
-      if (parsed && typeof parsed === 'object') {
-        const out = { ...defaults };
-        if (this._isValidSizesArray(parsed.tools)) out.tools = parsed.tools;
-        if (this._isValidSizesArray(parsed.files)) out.files = parsed.files;
-        return out;
-      }
-    } catch { /* ignore */ }
-    return { ...defaults };
-  }
-
-  _readChatSplitSizesForTab(tab: any) {
-    const all: any = this._readAllChatSplitSizes();
-    return (all[tab] || all.tools).slice();
-  }
-
-  _writeChatSplitSizesForTab(tab: any, sizes: any) {
-    if (!this._isValidSizesArray(sizes)) return;
-    const all: any = this._readAllChatSplitSizes();
-    all[tab] = sizes;
-    try { localStorage.setItem(ChatView.CHAT_SPLIT_SIZES_KEY, JSON.stringify(all)); }
-    catch { /* ignore */ }
-  }
-
-  _isChatMobile() {
-    return window.innerWidth <= ChatView.CHAT_SPLIT_MOBILE_MAX;
-  }
-
-  _initChatSplit() {
-    if (this._chatSplit) return;
-    // Mobile: don't init Split.js. CSS stacks the tools column below the
-    // chat stream (see .chat-split @media block). Hide the in-header toggle
-    // since it has no meaning when the layout is stacked.
-    if (this._isChatMobile()) {
-      if (this._splitToggleBtn) this._splitToggleBtn.hidden = true;
-      return;
-    }
-    if (this._splitToggleBtn) this._splitToggleBtn.hidden = false;
-
-    let collapsed = false;
-    try { collapsed = localStorage.getItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY) === '1'; } catch { /* ignore */ }
-    // Seed the cached "last sizes" from the currently active tab so an
-    // expand-after-collapse comes back to the right width for that tab.
-    this._chatSplitLastSizes = this._readChatSplitSizesForTab(this._toolsColTab);
-
-    const buildSplit = (sizes: any) => {
-      this._chatSplit = Split([this.streamEl, this.toolsColEl], {
-        sizes,
-        minSize: [400, 240],
-        gutterSize: 6,
-        snapOffset: 0,
-        expandToMin: true,
-        direction: 'horizontal',
-        elementStyle: (dim, size, gutterSize) => ({
-          'flex-basis': `calc(${size}% - ${gutterSize}px)`,
-        }),
-        gutterStyle: (dim, gutterSize) => ({ 'flex-basis': `${gutterSize}px` }),
-        onDragEnd: (next) => {
-          // Persist under the tab that is active at the moment of the
-          // drag. Users get a remembered width per tab without any
-          // explicit "save" step.
-          this._chatSplitLastSizes = next;
-          this._writeChatSplitSizesForTab(this._toolsColTab, next);
-        },
-      });
-    };
-
-    this._chatSplitCollapsed = collapsed;
-    this._applyChatSplitCollapsedClass();
-    this._applyToolsFullscreenClass();
-    this._updateToolsToggleLabel();
-    if (!collapsed) buildSplit(this._chatSplitLastSizes);
-    this._chatSplitBuild = buildSplit;
-  }
-
-  _destroyChatSplit() {
-    if (this._chatSplit) {
-      // No args: Split.js clears its inline flex-basis from both panes
-      // (and removes the gutter). Preserving inline styles would leave
-      // the chat-stream stuck at its dragged width even after the
-      // tools column collapses, which fights the CSS rule that
-      // reclaims the freed space.
-      try { this._chatSplit.destroy(); } catch { /* ignore */ }
-      this._chatSplit = null;
-    }
-  }
-
-  _applyChatSplitCollapsedClass() {
-    if (!this.chatSplitEl) return;
-    this.chatSplitEl.classList.toggle('chat-split--tools-collapsed', !!this._chatSplitCollapsed);
-    // Notify the topbar so its right-side panel icon can reflect state.
-    document.dispatchEvent(new CustomEvent('grok-remote:tools-state', {
-      detail: { collapsed: !!this._chatSplitCollapsed },
-    }));
-  }
-
-  _updateToolsToggleLabel() {
-    if (!this._splitToggleBtn) return;
-    const c = !!this._chatSplitCollapsed;
-    this._splitToggleBtn.textContent = c ? '⟨' : '⟩';
-    this._splitToggleBtn.title = c ? 'expand tools panel' : 'collapse tools panel';
-  }
-
-  _toggleToolsCol() {
-    // Mobile: stacked layout, no Split.js, no-op.
-    if (this._isChatMobile()) return;
-    const next = !this._chatSplitCollapsed;
-    this._chatSplitCollapsed = next;
-    try { localStorage.setItem(ChatView.CHAT_SPLIT_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
-    if (next) {
-      this._destroyChatSplit();
-    } else if (this._chatSplitBuild) {
-      this._chatSplitBuild(this._chatSplitLastSizes);
-    }
-    this._applyChatSplitCollapsedClass();
-    this._updateToolsToggleLabel();
-  }
-
-  _ensureToolsGroup(turn: any) {
-    if (turn._toolsGroup) return turn._toolsGroup;
-    const snippet = (turn.userText || '').trim();
-    const short = snippet.length > 80 ? snippet.slice(0, 78) + '...' : snippet;
-    const group = el('div', { class: 'tools-group' },
-      short ? el('div', { class: 'tools-group__head', title: snippet }, short) : null,
-    );
-    turn._toolsGroup = group;
-    this.toolsStreamEl.appendChild(group);
-    return group;
   }
 
   _initAutoScroll() {
+    this._userScrollIntentAt = 0;
     this._autoScroll = true;
-    this._autoScrollTools = true;
     const THRESHOLD = 60; // px from bottom counts as "at bottom"
     // Jump-to-latest button, hidden by default. Lives inside the stream so
     // it shows up above the composer without restructuring the layout.
@@ -1871,10 +1385,44 @@ export class ChatView {
     // so instead we compare against the most-recent eased target. If the
     // user is meaningfully off-target (more than the threshold), treat it
     // as a manual scroll-away.
+    // Only real input (wheel, touch, keys, mouse) counts as the user scrolling.
+    // Turns are lazily rendered (content-visibility), so their heights change
+    // after we jump to the bottom; those layout shifts must not read as
+    // "the user scrolled up".
+    const markIntent = () => { this._userScrollIntentAt = Date.now(); };
+    const intentEvents = ['wheel', 'touchstart', 'touchmove', 'mousedown'];
+    for (const ev of intentEvents) this.streamEl.addEventListener(ev, markIntent, { passive: true });
+    const onKey = (ev: KeyboardEvent) => {
+      if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End', ' '].includes(ev.key)) markIntent();
+    };
+    window.addEventListener('keydown', onKey, { passive: true });
+    const pinToBottom = () => {
+      const s = this.streamEl;
+      s.scrollTop = s.scrollHeight;
+      this._lastEasedWrite = s.scrollTop;
+      this._easedScrollTarget = s.scrollTop;
+    };
+    // While following, any size change in the thread (lazy turns realising,
+    // a message growing) keeps the bottom pinned.
+    const ro = new ResizeObserver(() => {
+      if (this._autoScroll === false) return;
+      const s = this.streamEl;
+      if (s.scrollHeight - s.scrollTop - s.clientHeight > 1) pinToBottom();
+    });
+    const mo = new MutationObserver((muts) => {
+      for (const m of muts) m.addedNodes.forEach((n) => { if (n instanceof Element) ro.observe(n); });
+    });
+    mo.observe(this.streamEl, { childList: true });
+
     const onScroll = () => {
       const el = this.streamEl;
       const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
       const atBottom = dist <= THRESHOLD;
+      if (!atBottom && this._autoScroll !== false && Date.now() - (this._userScrollIntentAt || 0) > 800) {
+        // Layout moved under us, not the user: stay pinned.
+        pinToBottom();
+        return;
+      }
       // While the eased loop is chasing the bottom, it writes scrollTop
       // mid-flight (still well above the bottom). Those writes raise
       // scroll events that look identical to user scroll-aways. Suppress
@@ -1903,32 +1451,6 @@ export class ChatView {
     };
     this.streamEl.addEventListener('scroll', onScroll, { passive: true });
 
-    // Same listener for the tools column. No jump-to-latest button there;
-    // we just pause the eased follow when the user scrolls up.
-    const onToolsScroll = () => {
-      const el = this.toolsStreamEl;
-      if (!el) return;
-      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-      const atBottom = dist <= THRESHOLD;
-      if (this._easedToolsRaf && !atBottom) {
-        if (this._lastEasedToolsWrite != null && el.scrollTop >= this._lastEasedToolsWrite - 4) {
-          return;
-        }
-      }
-      if (atBottom && !this._autoScrollTools) {
-        this._autoScrollTools = true;
-      } else if (!atBottom && this._autoScrollTools) {
-        this._autoScrollTools = false;
-        if (this._easedToolsRaf) {
-          cancelAnimationFrame(this._easedToolsRaf);
-          this._easedToolsRaf = 0;
-        }
-      }
-    };
-    if (this.toolsStreamEl) {
-      this.toolsStreamEl.addEventListener('scroll', onToolsScroll, { passive: true });
-    }
-
     // rAF is throttled while the tab is hidden, so the eased loop stalls.
     // When the user comes back, snap both streams to their targets so they
     // start aligned for any further easing.
@@ -1939,83 +1461,18 @@ export class ChatView {
         this._easedScrollTarget = this.streamEl.scrollTop;
         this._lastEasedWrite = this.streamEl.scrollTop;
       }
-      if (this._autoScrollTools !== false && this.toolsStreamEl) {
-        this.toolsStreamEl.scrollTop = this.toolsStreamEl.scrollHeight;
-        this._easedToolsTarget = this.toolsStreamEl.scrollTop;
-        this._lastEasedToolsWrite = this.toolsStreamEl.scrollTop;
-      }
     };
     document.addEventListener('visibilitychange', onVis);
 
     this._detachAutoScroll = () => {
       this.streamEl.removeEventListener('scroll', onScroll);
-      if (this.toolsStreamEl) this.toolsStreamEl.removeEventListener('scroll', onToolsScroll);
+      for (const ev of intentEvents) this.streamEl.removeEventListener(ev, markIntent);
+      window.removeEventListener('keydown', onKey);
+      ro.disconnect();
+      mo.disconnect();
       document.removeEventListener('visibilitychange', onVis);
       if (this._easedScrollRaf) { cancelAnimationFrame(this._easedScrollRaf); this._easedScrollRaf = 0; }
-      if (this._easedToolsRaf)  { cancelAnimationFrame(this._easedToolsRaf);  this._easedToolsRaf  = 0; }
     };
-  }
-
-  // ── in-flight strip ──────────────────────────────────────────────────
-
-  _addInFlight(data: any, cardNode: any) {
-    if (!data || !data.toolCallId) return;
-    if (this._inFlightMap.has(data.toolCallId)) return;
-    const label = (data.rawInput && (data.rawInput.command || data.rawInput.path || data.rawInput.file_path || data.rawInput.url))
-                || data.title
-                || data.kind
-                || 'tool';
-    const kind = data.kind || 'tool';
-    const startedAt = Date.now();
-    const chip = el('button', {
-      type: 'button',
-      class: 'inflight-chip',
-      title: `${kind} · ${label}`,
-      onclick: () => {
-        // Scroll the card into view and pulse it briefly so the user can
-        // confirm which one in the stream it maps to.
-        if (cardNode && cardNode.scrollIntoView) {
-          cardNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          cardNode.classList.add('tool-pill--highlight');
-          setTimeout(() => cardNode.classList.remove('tool-pill--highlight'), 1200);
-        }
-      },
-    },
-      el('span', { class: 'inflight-chip__dot' }),
-      el('span', { class: 'inflight-chip__kind' }, kind),
-      el('span', { class: 'inflight-chip__label' }, String(label)),
-      el('span', { class: 'inflight-chip__dur' }, '0s'),
-    );
-    this._inFlightMap.set(data.toolCallId, { kind, label, startedAt, chip });
-    this.inFlightStripEl.appendChild(chip);
-    this._syncInFlightVisibility();
-    this._startInFlightTicker();
-  }
-
-  _removeInFlight(toolCallId: any) {
-    const entry = this._inFlightMap.get(toolCallId);
-    if (!entry) return;
-    entry.chip.remove();
-    this._inFlightMap.delete(toolCallId);
-    this._syncInFlightVisibility();
-    if (this._inFlightMap.size === 0 && this._inFlightTimer) {
-      clearInterval(this._inFlightTimer);
-      this._inFlightTimer = null;
-    }
-  }
-
-  _clearAllInFlight() {
-    this._inFlightMap.clear();
-    this.inFlightStripEl.replaceChildren();
-    this._syncInFlightVisibility();
-    if (this._inFlightTimer) {
-      clearInterval(this._inFlightTimer);
-      this._inFlightTimer = null;
-    }
-  }
-
-  _syncInFlightVisibility() {
-    this.inFlightStripEl.hidden = this._inFlightMap.size === 0;
   }
 
   // ── background terminals strip ───────────────────────────────────────
@@ -2241,270 +1698,66 @@ export class ChatView {
     if (this._bgTermViewerEl) { this._bgTermViewerEl.remove(); this._bgTermViewerEl = null; }
   }
 
-  _startInFlightTicker() {
-    if (this._inFlightTimer) return;
-    this._inFlightTimer = setInterval(() => {
-      const now = Date.now();
-      for (const entry of this._inFlightMap.values()) {
-        const ms = now - entry.startedAt;
-        const durEl = entry.chip.querySelector('.inflight-chip__dur');
-        if (!durEl) continue;
-        if (ms < 1000) durEl.textContent = `${Math.round(ms)}ms`;
-        else if (ms < 60000) durEl.textContent = `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
-        else {
-          const m = Math.floor(ms / 60000);
-          const s = Math.round((ms % 60000) / 1000);
-          durEl.textContent = `${m}m${s ? ` ${s}s` : ''}`;
-        }
-      }
-      // Self-heal: walk the rendered pills and drop any stale chip whose
-      // card has reached terminal status without us having seen the event.
-      this._resyncInFlightStrip();
-    }, 500);
-  }
-
   // ── event dispatch ──────────────────────────────────────────────────
 
   handleEvent(name: any, payload: any, opts?: any) {
     const data = unwrap(payload);
+    // Side effects that aren't about drawing the thread.
     switch (name) {
-      case 'user_message':              return this.onUserMessage(data, opts);
-      case 'agent_message_chunk':       return this.onMessageChunk(data, opts);
-      case 'agent_thought_chunk':       return this.onThoughtChunk(data, opts);
-      case 'tool_call':                 return this.onToolCall(data, opts);
-      case 'tool_call_update':          return this.onToolCallUpdate(data, opts);
-      case 'tool_call_delta_chunk':     return this.onToolCallDelta(data);
       case 'available_commands_update': return this.onAvailableCommands(data);
       case 'handshake':                 return this.onHandshake(data);
-      case 'session_summary_generated': return this.onSessionSummary(data);
-      case 'prompt_complete':           return this.onPromptComplete(data);
-      case 'agent_status':              return this.onAgentStatus(data);
       case 'session_notification':      return this.onSessionNotification(data);
-      case 'error':                     return this.onError(data);
-      default: return;
+      case 'prompt_complete':           this.onPromptComplete(data); break;
+      case 'agent_status':              this.onAgentStatus(data); break;
+      case 'tool_call_update':          this._notifyFilesChanged(data); break;
+      default: break;
     }
+    void opts;
+    const ch = this.model.apply(name, payload, { ts: this._lastEventTs || Date.now() });
+    const changed = ch.newTurn || ch.added.length || ch.updated.length || ch.removed.length;
+    if (changed) {
+      if (ch.newTurn) this._cancelChatIntro();
+      this.thread.apply(ch, name, payload);
+      if (name === 'user_message' || name === 'user_message_chunk') this._decorateNewUser(ch);
+    }
+    this._syncLiveLine();
+    if (changed) this.scrollToBottom();
   }
 
-  onUserMessage(data: any, opts?: any) {
-    const text = (data && typeof data.text === 'string') ? data.text : extractText(data);
-    const attachments = Array.isArray(data && data.attachments) ? data.attachments : [];
-    if (!text && !attachments.length) return;
-    // Dedup: the live send() path calls startTurn(text) BEFORE the server
-    // echoes user_message back over SSE. If the active turn already has the
-    // same userText and no assistant/tools yet, the bubble is already there.
-    if (
-      this.activeTurn &&
-      (this.activeTurn.userText === text ||
-        ((this.activeTurn.userAttachments || []).length && attachments.length)) &&
-      !this.activeTurn.assistant &&
-      (!this.activeTurn.tools || !this.activeTurn.tools.length)
-    ) {
-      return;
-    }
-    this.startTurn(text, {
-      ts: this._lastEventTs || Date.now(),
-      fromHistory: !!(opts && opts.fromHistory),
-      attachments,
+  // Spinner row at the bottom while grok works and no tool run is showing
+  // its own live caption. Skipped during history replay.
+  _syncLiveLine() {
+    if (this._isReplaying) return;
+    const t = this.model.activeTurn();
+    const last = t && t.segments[t.segments.length - 1];
+    const runOpen = !!(last && last.type === 'run' && last.open);
+    this.thread.liveLine(this.model.isRunning() && !runOpen ? 'Thinking…' : null);
+  }
+
+  _decorateNewUser(ch: any) {
+    const segId = ch.added.find((id: string) => {
+      const s = this.model.segment(id);
+      return s && s.type === 'user';
     });
+    if (!segId || !ch.turnId) return;
+    const seg: any = this.model.segment(segId);
+    const root = this.thread.turnRoot(ch.turnId);
+    const user = this.thread.nodeOf(segId);
+    if (root && user) this._decorateSkill({ userText: seg.text, root, user });
   }
 
-  onMessageChunk(data: any, opts?: any) {
-    const text = extractText(data);
-    if (text == null) return;
-    const turn = this.ensureTurn();
-    const fresh = !turn.assistant;
-    if (fresh) {
-      turn.assistant = renderAssistantBubble(this._lastEventTs || Date.now());
-      // Mark the assistant bubble for entrance animation only on first
-      // insertion in the live path (skip during history replay).
-      if (!this._isReplaying && !(opts && opts.fromHistory)) {
-        turn.assistant.node.classList.add('msg--enter');
-      }
-      turn.root.appendChild(turn.assistant.node);
+  // If a file-mutating tool (Write / Edit / MultiEdit, all kind: 'edit')
+  // just completed, ping the Files panel so it can re-list. Skipped while
+  // replaying history because the disk is already in its final state.
+  _notifyFilesChanged(data: any) {
+    if (this._isReplaying || !this.agentId) return;
+    const status = String((data && data.status) || '').toLowerCase();
+    const kind   = String((data && data.kind)   || '').toLowerCase();
+    if (status === 'completed' && kind === 'edit') {
+      document.dispatchEvent(new CustomEvent('grok-remote:files-changed', {
+        detail: { agentId: this.agentId, toolCallId: data.toolCallId },
+      }));
     }
-    turn.assistant.append(text);
-    this.scrollToBottom();
-  }
-
-  onThoughtChunk(data: any, opts?: any) {
-    const text = extractText(data);
-    if (text == null) return;
-    const turn = this.ensureTurn();
-    if (!turn.thinking) {
-      turn.thinking = renderThinkingPane();
-      turn.root.appendChild(turn.thinking.node);
-    }
-    turn.thinking.append(text);
-    this.scrollToBottom();
-  }
-
-  // Coalesce TodoWrite tool calls so a checklist evolves in place
-  // instead of stacking a new pill per merge=true patch. Returns true
-  // when the call was absorbed (caller should NOT also create a pill).
-  //
-  // Rules:
-  //   - rawInput.merge === false (or no prior active card) → start a
-  //     fresh card. Falls through to the normal pill path; we just stash
-  //     the reference so later merges can find it.
-  //   - rawInput.merge === true and we have an active card → patch the
-  //     existing card and stop. No new pill, no strip chip.
-  _maybeRouteTodoToolCall(data: any, opts?: any) {
-    if (!isTodoWriteToolCall(data)) return false;
-    const ri = data.rawInput || {};
-    const isMerge = !!ri.merge;
-
-    // Merge update with an active todo card already: absorb in place.
-    if (isMerge && this._activeTodoCard && typeof this._activeTodoCard.ingestExternal === 'function') {
-      this._activeTodoCard.ingestExternal(data);
-      return true;
-    }
-
-    // grok often emits the initial tool_call event WITHOUT rawInput,
-    // then fills it in on a subsequent tool_call_update. By that point
-    // we've already created a regular card. Swap it for a todo card
-    // in place so the user sees the checklist, not raw JSON.
-    const turn = this.activeTurn || this.turns[this.turns.length - 1];
-    if (turn && data.toolCallId) {
-      const entry = turn.tools.find((t: any) => t.id === data.toolCallId);
-      if (entry && entry.card && !entry.card.isTodo) {
-        const next = renderTodoWriteCard(data);
-        if (entry.card.node && entry.card.node.parentNode) {
-          entry.card.node.parentNode.replaceChild(next.node, entry.card.node);
-        }
-        entry.card = next;
-        this._activeTodoCard = next;
-        // Drop any in-flight chip the old regular card had registered;
-        // todo cards don't participate in the strip.
-        try { this._removeInFlight(data.toolCallId); } catch { /* ignore */ }
-        return true;
-      }
-      // An existing todo card with the same id getting a non-merge
-      // update: just re-ingest. Covers the rare case of grok re-seeding
-      // the list mid-conversation.
-      if (entry && entry.card && entry.card.isTodo) {
-        entry.card.applyUpdate(data);
-        this._activeTodoCard = entry.card;
-        return true;
-      }
-    }
-
-    // No existing entry: let the normal creation path run and tag the
-    // resulting card as the active todo (renderToolCard will dispatch
-    // to renderTodoWriteCard when rawInput.variant is present).
-    this._pendingTodoSeed = true;
-    return false;
-  }
-
-  onToolCall(data: any, opts?: any) {
-    // TodoWrite tool calls coalesce into a single live-updating card
-    // (see _maybeRouteTodoToolCall). Subsequent calls with merge=true
-    // are absorbed by the previous card instead of producing siblings.
-    if (this._maybeRouteTodoToolCall(data, opts)) return;
-
-    const turn = this.ensureTurn();
-    const card = renderToolCard(data);
-    turn.tools.push({ id: data.toolCallId, card });
-    const live = !this._isReplaying && !(opts && opts.fromHistory);
-    if (live) card.node.classList.add('tool-pill--enter');
-    this._ensureToolsGroup(turn).appendChild(card.node);
-    this._scrollToolsToBottom();
-    // Add to the in-flight strip unless this came from history replay
-    // (those calls are already terminal and would just flash). Skip
-    // entirely for todo cards: they aren't interesting work in flight.
-    if (live && !card.isTodo) {
-      this._addInFlight(data, card.node);
-    }
-    if (this._pendingTodoSeed) {
-      this._activeTodoCard = card;
-      this._pendingTodoSeed = false;
-    }
-    this.scrollToBottom();
-  }
-
-  onToolCallUpdate(data: any, opts?: any) {
-    if (this._maybeRouteTodoToolCall(data, opts)) return;
-
-    const turn = this.activeTurn || this.turns[this.turns.length - 1];
-    if (!turn) return;
-    let entry = turn.tools.find((t: any) => t.id === data.toolCallId);
-    if (entry) {
-      entry.card.applyUpdate(data);
-    } else {
-      // server might emit an update before we ever saw a tool_call. create one.
-      const card = renderToolCard(data);
-      turn.tools.push({ id: data.toolCallId, card });
-      const live = !this._isReplaying && !(opts && opts.fromHistory);
-      if (live) card.node.classList.add('tool-pill--enter');
-      this._ensureToolsGroup(turn).appendChild(card.node);
-      this._scrollToolsToBottom();
-      if (live && !card.isTodo) this._addInFlight(data, card.node);
-      if (this._pendingTodoSeed) {
-        this._activeTodoCard = card;
-        this._pendingTodoSeed = false;
-      }
-      entry = turn.tools[turn.tools.length - 1];
-    }
-    // Always reconcile the strip against the actual pill statuses. This is
-    // robust to wire-format variations: whatever rendered the pill as
-    // COMPLETED also drains its chip from the strip.
-    this._resyncInFlightStrip();
-
-    // If a file-mutating tool (Write / Edit / MultiEdit, all kind: 'edit')
-    // just completed, ping the Files panel so it can re-list. Skipped while
-    // replaying history because the disk is already in its final state and
-    // a flurry of refreshes during catch-up wastes IO. The event carries
-    // the agent id so the listener can ignore updates from a stale mount.
-    if (!this._isReplaying && this.agentId) {
-      const status = String((data && data.status) || '').toLowerCase();
-      const kind   = String((data && data.kind)   || '').toLowerCase();
-      if (status === 'completed' && kind === 'edit') {
-        document.dispatchEvent(new CustomEvent('grok-remote:files-changed', {
-          detail: { agentId: this.agentId, toolCallId: data.toolCallId },
-        }));
-      }
-    }
-  }
-
-  // Walk the current turn's tools and drop any strip chips whose card has
-  // reached a terminal status. Cheap (small N) and self-healing if an
-  // intermediate event was missed.
-  _resyncInFlightStrip() {
-    if (!this._inFlightMap.size) return;
-    const TERMINAL = new Set(['completed','failed','canceled','cancelled','success','succeeded','error','errored']);
-    // Collect all currently-rendered tool ids across all turns since strip
-    // chips can outlive a single turn boundary.
-    const liveByActive = new Map(); // id -> status string (lowercased)
-    for (const turn of this.turns) {
-      for (const t of (turn.tools || [])) {
-        const s = (t.card && t.card.getStatus && t.card.getStatus() || '').toLowerCase();
-        liveByActive.set(t.id, s);
-      }
-    }
-    for (const tid of Array.from(this._inFlightMap.keys())) {
-      const s = liveByActive.get(tid);
-      // Gone from any turn (shouldn't happen, but defensive) or terminal: drop.
-      if (s == null || TERMINAL.has(s)) {
-        this._removeInFlight(tid);
-      }
-    }
-  }
-
-  onToolCallDelta(data: any) {
-    const turn = this.activeTurn || this.turns[this.turns.length - 1];
-    if (!turn || !turn.tools.length) return;
-    // append to most-recent open tool card
-    let target = null;
-    for (let i = turn.tools.length - 1; i >= 0; i--) {
-      const status = turn.tools[i].card.getStatus();
-      if (status !== 'completed' && status !== 'failed') { target = turn.tools[i]; break; }
-    }
-    if (!target) target = turn.tools[turn.tools.length - 1];
-    if (data && data.toolCallId) {
-      const exact = turn.tools.find((t: any) => t.id === data.toolCallId);
-      if (exact) target = exact;
-    }
-    target.card.appendDelta(data);
-    this.scrollToBottom();
   }
 
   onAvailableCommands(data: any) {
@@ -2531,13 +1784,6 @@ export class ChatView {
     }
   }
 
-  onSessionSummary(data: any) {
-    const text = (data && (data.summary || data.text)) || '';
-    const pill = renderCompactedPill(text);
-    this.streamEl.appendChild(pill);
-    this.scrollToBottom();
-  }
-
   onPromptComplete(data: any) {
     const meta = (data && data._meta) || data || {};
     if (meta && (meta.totalTokens != null || meta.total_tokens != null)) {
@@ -2545,10 +1791,6 @@ export class ChatView {
       this._renderTokensPill();
     this._renderInflightPill();
     }
-    // The turn is done; any tools that didn't get a terminal update were
-    // implicitly completed (or aborted). Clear the strip so it doesn't
-    // show ghost activity between turns.
-    this._clearAllInFlight();
     // Capture sessionId/cwd from prompt_complete meta if the agent record is
     // missing it (handshake metadata is sometimes delivered out of band).
     if (this.currentAgent) {
@@ -2561,7 +1803,7 @@ export class ChatView {
       // refresh the info pane if visible
       if (this.tabsState === 'info') this.renderInfo(this.currentAgent);
     }
-    this.endTurn(meta);
+    this.composerCancel.disabled = true;
   }
 
   onAgentStatus(data: any) {
@@ -2585,13 +1827,6 @@ export class ChatView {
   onSessionNotification(data: any) {
     const text = (data && (data.message || data.text)) || JSON.stringify(data).slice(0, 200);
     this.showToast(text, 'info');
-  }
-
-  onError(data: any) {
-    const text = (data && (data.message || data.error)) || (typeof data === 'string' ? data : JSON.stringify(data));
-    const turn = this.activeTurn || this.ensureTurn();
-    turn.root.appendChild(renderErrorBanner(text));
-    this.scrollToBottom();
   }
 
   // ── composer actions ────────────────────────────────────────────────
@@ -2618,7 +1853,7 @@ export class ChatView {
     // auto-scroll regardless of where they were in the history.
     this._autoScroll = true;
     if (this._jumpToLatestBtn) this._jumpToLatestBtn.hidden = true;
-    this.startTurn(text, { attachments });
+    this.handleEvent('user_message', { text, attachments });
     this.scrollToBottom({ force: true });
     this.composerCancel.disabled = false;
 
@@ -2627,8 +1862,7 @@ export class ChatView {
       this._lastServerEcho = resp && typeof resp === 'object' ? resp : null;
       if (this.imageAttach) this.imageAttach.clear();
     } catch (e: any) {
-      this.activeTurn && this.activeTurn.root.appendChild(renderErrorBanner(e.message));
-      this.endTurn(null);
+      this.handleEvent('error', { message: e.message });
     }
   }
 
@@ -3165,5 +2399,5 @@ export class ChatView {
   }
 }
 
-// `unwrap` and `extractText` moved to ../lib/acp-payload.ts so they're
-// typed + unit-testable. Imported above.
+// `unwrap` lives in ../lib/acp-payload.ts so it's
+// typed and unit-testable. Imported above.
